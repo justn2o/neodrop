@@ -1,0 +1,356 @@
+/* NeoDrop — design sobre : fond neutre, une couleur d'accent, typo système. */
+
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1b1f24;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --accent-dark: #1d4ed8;
+  --danger: #dc2626;
+  --border: #e2e5ea;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { height: 100%; }
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* ---------- écrans ---------- */
+
+.screen {
+  display: none;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  min-height: 100vh;
+}
+
+.screen.active { display: flex; }
+
+.screen-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.screen-header h2 { font-size: 19px; font-weight: 650; }
+
+.back-btn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 8px;
+  width: 34px; height: 34px;
+  font-size: 17px;
+  cursor: pointer;
+  color: var(--muted);
+}
+.back-btn:hover { color: var(--text); border-color: var(--muted); }
+
+/* ---------- accueil ---------- */
+
+.brand { text-align: center; margin-top: 36px; }
+
+.logo {
+  width: 64px; height: 64px;
+  margin: 0 auto 12px;
+  border-radius: 18px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 30px;
+  display: flex; align-items: center; justify-content: center;
+}
+
+.brand h1 { font-size: 26px; letter-spacing: -0.5px; }
+.tagline { color: var(--muted); margin-top: 6px; font-size: 14px; }
+
+.home-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 28px;
+}
+
+.big-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 22px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color .12s, transform .12s;
+}
+.big-btn:hover { border-color: var(--accent); transform: translateY(-1px); }
+.big-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.big-btn.primary:hover { background: var(--accent-dark); }
+.big-btn-icon { font-size: 26px; }
+.big-btn-label { font-size: 18px; font-weight: 650; }
+.big-btn-sub { font-size: 13px; opacity: .75; }
+
+/* ---------- boutons génériques ---------- */
+
+.btn {
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 550;
+  padding: 10px 18px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { background: var(--accent-dark); }
+.btn.full { width: 100%; }
+.btn.small-btn { padding: 6px 12px; font-size: 13px; }
+.btn.danger-outline { color: var(--danger); border-color: var(--danger); background: transparent; }
+.btn.danger-outline:hover { background: rgba(220, 38, 38, .06); }
+.btn:disabled { opacity: .5; cursor: default; }
+
+/* ---------- zone de dépôt ---------- */
+
+.drop-zone {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 32px;
+  text-align: center;
+  cursor: pointer;
+  min-height: 260px;
+}
+.drop-zone.dragover { border-color: var(--accent); background: #eff4ff; }
+.drop-icon { font-size: 38px; color: var(--accent); }
+
+/* ---------- code d'appairage ---------- */
+
+.code-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 26px 18px 18px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+
+.pairing-code {
+  font-size: 38px;
+  font-weight: 750;
+  letter-spacing: 2px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.code-input {
+  font-family: inherit;
+  font-size: 24px;
+  font-weight: 650;
+  text-align: center;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+  width: 100%;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.code-input:focus { border-color: var(--accent); }
+
+.field-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* ---------- listes de fichiers ---------- */
+
+.file-summary {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 14px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+.file-summary:empty { display: none; }
+
+.file-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+.file-row:last-child { border-bottom: none; }
+.file-row .name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.file-row .size { color: var(--muted); flex-shrink: 0; }
+
+/* ---------- statuts / spinner ---------- */
+
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--muted);
+  justify-content: center;
+}
+
+.spinner {
+  width: 16px; height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.hidden { display: none !important; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.center { text-align: center; }
+.hint { font-size: 13px; color: var(--muted); text-align: center; }
+
+/* ---------- confirmation ---------- */
+
+.confirm-text { font-size: 15px; }
+.confirm-text strong { font-weight: 700; }
+
+.dest-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.dest-row > div { min-width: 0; }
+.dest-path {
+  display: block;
+  font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 12px;
+}
+.confirm-actions .btn { flex: 1; padding: 13px; font-size: 15px; }
+
+/* ---------- progression ---------- */
+
+.conn-badge {
+  align-self: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: #eff4ff;
+  border: 1px solid #c7d8fe;
+  border-radius: 999px;
+  padding: 3px 12px;
+}
+
+.progress-block {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  gap: 12px;
+}
+.progress-meta span:first-child {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.progress-bar {
+  height: 10px;
+  background: var(--bg);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width .15s linear;
+}
+
+.progress-stats {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ---------- résultats ---------- */
+
+.result-icon {
+  width: 64px; height: 64px;
+  margin: 40px auto 0;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 30px;
+  color: #fff;
+}
+.result-icon.ok { background: #16a34a; }
+.result-icon.err { background: var(--danger); }
+
+#screen-done h2, #screen-error h2 { text-align: center; }
+
+.error-text {
+  text-align: center;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+#btn-open-folder { align-self: center; }
+#btn-cancel-wait, #btn-cancel-transfer, #btn-cancel-receive { align-self: center; }
