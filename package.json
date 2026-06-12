@@ -1,0 +1,22 @@
+{
+  "name": "neodrop",
+  "productName": "NeoDrop",
+  "version": "1.0.0",
+  "description": "Transfert de fichiers pair-à-pair entre ordinateurs distants, sans serveur",
+  "author": "NeoDrop",
+  "license": "MIT",
+  "main": "src/main/index.js",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win",
+    "test": "node test/run-tests.js"
+  },
+  "dependencies": {
+    "b4a": "^1.6.7",
+    "hyperswarm": "^4.8.4"
+  },
+  "devDependencies": {
+    "electron": "^37.0.0",
+    "electron-builder": "^25.1.8"
+  }
+}

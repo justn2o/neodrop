@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:">
+  <title>NeoDrop</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Accueil -->
+  <section id="screen-home" class="screen active">
+    <div class="brand">
+      <div class="logo">⇄</div>
+      <h1>NeoDrop</h1>
+      <p class="tagline">Transfert de fichiers pair-à-pair,<br>sans serveur, chiffré de bout en bout.</p>
+    </div>
+    <div class="home-actions">
+      <button id="btn-go-send" class="big-btn primary">
+        <span class="big-btn-icon">↑</span>
+        <span class="big-btn-label">Envoyer</span>
+        <span class="big-btn-sub">Partager des fichiers avec un code</span>
+      </button>
+      <button id="btn-go-receive" class="big-btn">
+        <span class="big-btn-icon">↓</span>
+        <span class="big-btn-label">Recevoir</span>
+        <span class="big-btn-sub">Saisir le code reçu</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- Envoyer : choix des fichiers -->
+  <section id="screen-send" class="screen">
+    <header class="screen-header">
+      <button class="back-btn" data-back>←</button>
+      <h2>Envoyer des fichiers</h2>
+    </header>
+    <div id="drop-zone" class="drop-zone" tabindex="0">
+      <div class="drop-icon">⤓</div>
+      <p>Glisse tes fichiers ici</p>
+      <p class="muted">ou</p>
+      <button id="btn-browse" class="btn">Parcourir…</button>
+    </div>
+    <p class="hint">Un code d'appairage sera généré dès la sélection.</p>
+  </section>
+
+  <!-- Envoyer : code affiché, attente du destinataire -->
+  <section id="screen-wait" class="screen">
+    <header class="screen-header">
+      <h2>Code d'appairage</h2>
+    </header>
+    <div class="code-box">
+      <div id="pairing-code" class="pairing-code">·····</div>
+      <button id="btn-copy" class="btn">Copier</button>
+      <p id="code-expiry" class="muted small"></p>
+    </div>
+    <div id="wait-files" class="file-summary"></div>
+    <div class="status-line">
+      <span class="spinner" id="wait-spinner"></span>
+      <span id="wait-status">En attente du destinataire…</span>
+    </div>
+    <p class="hint">Communique ce code au destinataire. Il est à usage unique et expire après 15 minutes.</p>
+    <button id="btn-cancel-wait" class="btn danger-outline">Annuler</button>
+  </section>
+
+  <!-- Recevoir : saisie du code -->
+  <section id="screen-receive" class="screen">
+    <header class="screen-header">
+      <button class="back-btn" data-back>←</button>
+      <h2>Recevoir des fichiers</h2>
+    </header>
+    <label class="field-label" for="code-input">Code d'appairage</label>
+    <input id="code-input" class="code-input" type="text" placeholder="TIGRE-7342"
+           autocomplete="off" spellcheck="false" maxlength="20">
+    <button id="btn-connect" class="btn primary full">Se connecter</button>
+    <div id="receive-status" class="status-line hidden">
+      <span class="spinner"></span>
+      <span id="receive-status-text">Recherche de l'expéditeur…</span>
+    </div>
+    <button id="btn-cancel-receive" class="btn danger-outline hidden">Annuler</button>
+  </section>
+
+  <!-- Confirmation côté destinataire -->
+  <section id="screen-confirm" class="screen">
+    <header class="screen-header">
+      <h2>Demande de transfert</h2>
+    </header>
+    <p id="confirm-text" class="confirm-text"></p>
+    <div id="confirm-files" class="file-summary"></div>
+    <div class="dest-row">
+      <div>
+        <span class="field-label">Dossier de destination</span>
+        <span id="dest-dir" class="dest-path"></span>
+      </div>
+      <button id="btn-change-dir" class="btn small-btn">Modifier…</button>
+    </div>
+    <div class="confirm-actions">
+      <button id="btn-accept" class="btn primary">Accepter</button>
+      <button id="btn-reject" class="btn danger-outline">Refuser</button>
+    </div>
+    <p class="hint">Rien n'est écrit sur le disque avant ton accord.</p>
+  </section>
+
+  <!-- Progression (commun envoi / réception) -->
+  <section id="screen-progress" class="screen">
+    <header class="screen-header">
+      <h2 id="progress-title">Transfert en cours…</h2>
+    </header>
+    <div id="conn-badge" class="conn-badge hidden"></div>
+    <div class="progress-block">
+      <div class="progress-meta">
+        <span id="progress-file"></span>
+        <span id="progress-pct">0 %</span>
+      </div>
+      <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+      <div class="progress-stats">
+        <span id="progress-speed">—</span>
+        <span id="progress-eta">—</span>
+      </div>
+      <div class="progress-meta small muted">
+        <span id="progress-global"></span>
+      </div>
+    </div>
+    <button id="btn-cancel-transfer" class="btn danger-outline">Annuler</button>
+  </section>
+
+  <!-- Succès -->
+  <section id="screen-done" class="screen">
+    <div class="result-icon ok">✓</div>
+    <h2 id="done-title">Transfert terminé</h2>
+    <p id="done-text" class="muted center"></p>
+    <div id="done-files" class="file-summary"></div>
+    <button id="btn-open-folder" class="btn hidden">Ouvrir le dossier</button>
+    <button id="btn-done-home" class="btn primary full">Nouveau transfert</button>
+  </section>
+
+  <!-- Erreur -->
+  <section id="screen-error" class="screen">
+    <div class="result-icon err">✕</div>
+    <h2>Oups</h2>
+    <p id="error-text" class="error-text"></p>
+    <button id="btn-error-home" class="btn primary full">Retour à l'accueil</button>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>
