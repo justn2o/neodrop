@@ -73,6 +73,10 @@ Produit un installateur NSIS (`.exe`) dans `dist/`. L'installateur laisse le
 choix du dossier d'installation. Les cibles macOS/Linux sont prêtes en
 commentaire dans `electron-builder.yml`.
 
+> **Cross-build depuis Linux/macOS** : la cible NSIS nécessite alors wine
+> (avec le support 32 bits, paquet `wine32`). Sous **Windows**, aucun
+> prérequis supplémentaire — lance simplement `npm run build:win`.
+
 ## Structure du projet
 
 ```
