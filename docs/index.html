@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NeoDrop — peer-to-peer file transfer</title>
+<meta name="description" content="Send files and folders straight to another computer with a short code. No server, end-to-end encrypted.">
+<style>
+  :root{
+    --bg:#f6f7f9; --surface:#fff; --text:#1b1f24; --muted:#6b7280;
+    --accent:#2563eb; --accent-dark:#1d4ed8; --border:#e2e5ea; --radius:14px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    background:var(--bg);color:var(--text);line-height:1.6;
+  }
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:960px;margin:0 auto;padding:0 24px}
+
+  header{
+    background:linear-gradient(160deg,#1d4ed8,#2563eb 55%,#3b82f6);
+    color:#fff;text-align:center;padding:80px 24px 72px;
+  }
+  .logo{
+    width:84px;height:84px;margin:0 auto 20px;border-radius:22px;
+    background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);
+    display:flex;align-items:center;justify-content:center;font-size:42px;
+  }
+  header h1{font-size:46px;letter-spacing:-1px;font-weight:750}
+  header p.tag{font-size:20px;opacity:.92;margin-top:12px}
+  .cta{margin-top:28px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .btn{
+    display:inline-block;padding:12px 22px;border-radius:10px;font-weight:600;
+    border:1px solid transparent;cursor:pointer;font-size:15px;
+  }
+  .btn.primary{background:#fff;color:var(--accent-dark)}
+  .btn.primary:hover{background:#eef2ff;text-decoration:none}
+  .btn.ghost{border-color:rgba(255,255,255,.5);color:#fff}
+  .btn.ghost:hover{background:rgba(255,255,255,.12);text-decoration:none}
+
+  section{padding:64px 0}
+  h2{font-size:28px;letter-spacing:-.4px;text-align:center;margin-bottom:8px}
+  .sub{text-align:center;color:var(--muted);margin-bottom:40px}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px}
+  .card{
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+    padding:22px;
+  }
+  .card .ic{font-size:24px}
+  .card h3{font-size:17px;margin:10px 0 6px}
+  .card p{color:var(--muted);font-size:15px}
+
+  .steps{counter-reset:s;max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+  .step{display:flex;gap:16px;align-items:flex-start}
+  .step .n{
+    counter-increment:s;flex:0 0 36px;height:36px;border-radius:50%;
+    background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;
+  }
+  .step .n::before{content:counter(s)}
+  .step p{padding-top:5px}
+  .step b{color:var(--text)}
+
+  .secure{background:var(--surface);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+  .secure ul{max-width:720px;margin:0 auto;list-style:none;display:grid;gap:12px}
+  .secure li{padding-left:28px;position:relative;color:var(--muted)}
+  .secure li::before{content:"\2713";position:absolute;left:0;color:#16a34a;font-weight:700}
+  .secure li b{color:var(--text)}
+
+  pre{
+    background:#0f172a;color:#e2e8f0;border-radius:12px;padding:18px 20px;overflow:auto;
+    font-size:14px;line-height:1.7;max-width:720px;margin:0 auto;
+  }
+  .muted{color:var(--muted)}
+  footer{text-align:center;padding:40px 24px;color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="logo">&#8644;</div>
+    <h1>NeoDrop</h1>
+    <p class="tag">Send files and folders straight to another computer &mdash; with a short code.</p>
+    <p class="tag" style="font-size:16px;opacity:.8">No server. No account. End-to-end encrypted.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/justn2o/p2neo">View on GitHub</a>
+      <a class="btn ghost" href="#download">Download</a>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>Why NeoDrop</h2>
+    <p class="sub">It goes from one machine to the other &mdash; nothing is uploaded to the cloud.</p>
+    <div class="grid">
+      <div class="card"><div class="ic">&#128193;</div><h3>Files &amp; folders</h3><p>One file, many files, or a whole folder &mdash; the structure is rebuilt exactly on the other side.</p></div>
+      <div class="card"><div class="ic">&#128273;</div><h3>Simple pairing</h3><p>You get a short code like <b>TIGER-7342</b> (and a QR code to scan). The other person just types it in.</p></div>
+      <div class="card"><div class="ic">&#128274;</div><h3>End-to-end encrypted</h3><p>Direct, encrypted connection between the two computers. Every file is SHA-256 verified on arrival.</p></div>
+      <div class="card"><div class="ic">&#9889;</div><h3>Fast on a LAN</h3><p>Two computers on the same network find each other in milliseconds.</p></div>
+      <div class="card"><div class="ic">&#9851;</div><h3>Resume after a drop</h3><p>If the connection cuts out, restart with the same code and it picks up where it left off.</p></div>
+      <div class="card"><div class="ic">&#9881;</div><h3>You stay in control</h3><p>The receiver sees what&rsquo;s coming, picks where to save it, and nothing is written until they accept.</p></div>
+    </div>
+  </div>
+</section>
+
+<section style="padding-top:0">
+  <div class="wrap">
+    <h2>How it works</h2>
+    <p class="sub">Three steps, both ways.</p>
+    <div class="steps">
+      <div class="step"><div class="n"></div><p><b>Send</b> &mdash; drop your files or a folder onto the app. You get a short pairing code (and a QR code).</p></div>
+      <div class="step"><div class="n"></div><p><b>Share the code</b> &mdash; the other person, anywhere, enters it. If it&rsquo;s on their clipboard it&rsquo;s filled in for them.</p></div>
+      <div class="step"><div class="n"></div><p><b>Receive</b> &mdash; they confirm, pick a folder, and the transfer runs with progress on both sides, then an integrity check.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="secure">
+  <div class="wrap">
+    <h2>Built to be private</h2>
+    <p class="sub">Security is the default, not an option.</p>
+    <ul>
+      <li><b>No server</b> &mdash; peers find each other through a public distributed network and connect directly.</li>
+      <li><b>End-to-end encryption</b> (Noise protocol) on every connection, including on the local network.</li>
+      <li><b>The code never travels in clear</b> &mdash; a mutual challenge-response proves both sides know it, bound to the connection to defeat man-in-the-middle.</li>
+      <li><b>Optional passphrase and stronger codes</b> for sensitive transfers.</li>
+      <li><b>SHA-256 integrity check</b> &mdash; what arrives is exactly what was sent, or it&rsquo;s rejected.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap">
+    <h2>Get it</h2>
+    <p class="sub">Windows, macOS and Linux builds are published on GitHub Releases.</p>
+    <p style="text-align:center;margin-bottom:24px">
+      <a class="btn primary" style="background:var(--accent);color:#fff" href="https://github.com/justn2o/p2neo/releases">Download from Releases</a>
+    </p>
+    <p class="sub" style="margin-bottom:14px">Or run it from source:</p>
+    <pre>git clone https://github.com/justn2o/p2neo.git
+cd p2neo
+npm install
+npm start
+
+# command line
+node bin/cli.js</pre>
+  </div>
+</section>
+
+<footer>
+  <p>NeoDrop &mdash; open source on <a href="https://github.com/justn2o/p2neo">GitHub</a>. MIT licensed.</p>
+</footer>
+
+</body>
+</html>
