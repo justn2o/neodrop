@@ -10,12 +10,17 @@ const os = require('os')
 const path = require('path')
 const fs = require('fs')
 const fsp = require('fs/promises')
-const { ipcMain, dialog, app, shell } = require('electron')
+const { ipcMain, dialog, app, shell, Notification, nativeImage, clipboard } = require('electron')
+const QRCode = require('qrcode')
 const { generateCode, normalizeCode } = require('./code')
 const { SwarmSession, CODE_TTL_MS, MAX_AUTH_FAILURES } = require('./swarm')
 const { TransferSender, TransferReceiver, cleanupAllPartFiles } = require('./transfer')
 
 const MAX_FILES = 5000 // garde-fou : nombre de fichiers par transfert
+const MAX_HISTORY = 50 // entrées d'historique conservées
+const THUMB_MAX_FILES = 24 // au-delà, pas de miniatures (OFFER trop lourde)
+const THUMB_SRC_MAX = 16 * 1024 * 1024 // on ne miniaturise pas une image énorme
+const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'])
 
 // Une seule session (envoi OU réception) à la fois : c'est le parcours
 // voulu, et cela simplifie tous les états d'erreur.
@@ -45,6 +50,65 @@ function defaultDownloadDir () {
   const cfg = loadConfig()
   if (cfg.defaultDir && fs.existsSync(cfg.defaultDir)) return cfg.defaultDir
   return app.getPath('downloads')
+}
+
+/** Dossier de cache des transferts partiels (reprise après coupure, #1). */
+function resumeDir () {
+  return path.join(app.getPath('userData'), 'partials')
+}
+
+/* --------------------------- historique -------------------------- */
+
+function loadHistory () {
+  const cfg = loadConfig()
+  return Array.isArray(cfg.history) ? cfg.history : []
+}
+
+function pushHistory (entry) {
+  const cfg = loadConfig()
+  const history = Array.isArray(cfg.history) ? cfg.history : []
+  history.unshift({ at: Date.now(), ...entry })
+  cfg.history = history.slice(0, MAX_HISTORY)
+  saveConfig(cfg)
+}
+
+/* ------------------------- notifications ------------------------- */
+
+/**
+ * Notification système, surtout utile quand la fenêtre est en arrière-plan.
+ * Best-effort : silencieuse si l'OS ne les supporte pas.
+ */
+function notify (win, title, body) {
+  try {
+    if (!Notification || !Notification.isSupported || !Notification.isSupported()) return
+    if (win && !win.isDestroyed() && win.isFocused()) return // l'UI est déjà visible
+    const n = new Notification({ title, body, silent: false })
+    n.on('click', () => { if (win && !win.isDestroyed()) { win.show(); win.focus() } })
+    n.show()
+  } catch {}
+}
+
+/* --------------------------- miniatures -------------------------- */
+
+/**
+ * Génère une petite miniature (data URL) pour un fichier image, via
+ * nativeImage. Retourne null si ce n'est pas une image gérée, si elle est
+ * trop grosse, ou en cas d'échec. Sert d'aperçu côté destinataire (#8).
+ */
+function makeThumb (filePath, size) {
+  try {
+    const ext = path.extname(filePath).toLowerCase()
+    if (!IMAGE_EXT.has(ext) || size > THUMB_SRC_MAX) return null
+    const img = nativeImage.createFromPath(filePath)
+    if (img.isEmpty()) return null
+    const { width, height } = img.getSize()
+    if (!width || !height) return null
+    const scaled = img.resize({ height: Math.min(96, height) })
+    const url = scaled.toDataURL()
+    return (typeof url === 'string' && url.length < 180000) ? url : null
+  } catch {
+    return null
+  }
 }
 
 /* --------------------------- helpers ----------------------------- */
@@ -126,7 +190,7 @@ function humanError (err) {
 
 /* ----------------------------- envoi ----------------------------- */
 
-async function startSend (win, paths) {
+async function startSend (win, paths, opts = {}) {
   await teardownSession()
 
   if (!Array.isArray(paths) || paths.length === 0) {
@@ -135,15 +199,26 @@ async function startSend (win, paths) {
   // Expansion des dossiers en arborescence de fichiers (avec leurs chemins
   // relatifs), et métadonnées résumées pour l'écran d'attente.
   const entries = await expandEntries(paths)
+  const withThumbs = entries.length <= THUMB_MAX_FILES
   const filesMeta = []
   for (const e of entries) {
     const st = await fsp.stat(e.path)
-    filesMeta.push({ name: path.basename(e.relPath), relPath: e.relPath, size: st.size })
+    // Miniature pour les images (aperçu côté destinataire, #8).
+    if (withThumbs) {
+      const thumb = makeThumb(e.path, st.size)
+      if (thumb) e.thumb = thumb
+    }
+    filesMeta.push({ name: path.basename(e.relPath), relPath: e.relPath, size: st.size, thumb: e.thumb || null })
   }
   const isFolder = entries.some((e) => e.relPath.includes('/'))
 
-  const code = generateCode()
-  const session = new SwarmSession({ code, role: 'sender' })
+  const passphrase = typeof opts.passphrase === 'string' ? opts.passphrase.trim() : ''
+  const strength = opts.strength || 'normal'
+  const compression = opts.compression !== false
+  const rateLimit = Number(opts.rateLimit) > 0 ? Number(opts.rateLimit) : 0
+
+  const code = generateCode({ strength })
+  const session = new SwarmSession({ code, role: 'sender', passphrase })
   current = { swarmSession: session, transfer: null, role: 'sender' }
 
   session.on('peer-connected', () => emitToRenderer(win, 'peer-connected'))
@@ -164,8 +239,11 @@ async function startSend (win, paths) {
 
   session.on('peer-authenticated', ({ frames, connectionType }) => {
     emitToRenderer(win, 'peer-authenticated', { connectionType })
+    notify(win, 'NeoDrop', 'Le destinataire est connecté.')
 
-    const sender = new TransferSender(frames, entries, { senderName: os.hostname() })
+    const sender = new TransferSender(frames, entries, {
+      senderName: os.hostname(), compression, rateLimit
+    })
     if (current) current.transfer = sender
 
     sender.on('offer-sent', ({ files, totalSize }) =>
@@ -179,6 +257,14 @@ async function startSend (win, paths) {
     sender.on('file-done', (f) => emitToRenderer(win, 'file-done', f))
     sender.on('done', () => {
       // Usage unique : le code meurt avec le transfert réussi.
+      pushHistory({
+        direction: 'send',
+        folder: isFolder,
+        count: filesMeta.length,
+        totalSize: filesMeta.reduce((a, f) => a + f.size, 0),
+        names: filesMeta.slice(0, 5).map((f) => f.name)
+      })
+      notify(win, 'NeoDrop', 'Transfert terminé avec succès.')
       emitToRenderer(win, 'done')
       teardownSession()
     })
@@ -195,20 +281,24 @@ async function startSend (win, paths) {
   })
 
   await session.start()
-  return { code, expiresAt: Date.now() + CODE_TTL_MS, files: filesMeta, folder: isFolder }
+  // QR code du code d'appairage (scan rapide depuis un téléphone, #2).
+  let qr = null
+  try { qr = await QRCode.toDataURL(code, { margin: 1, width: 220 }) } catch {}
+  return { code, qr, expiresAt: Date.now() + CODE_TTL_MS, files: filesMeta, folder: isFolder, passphrase: !!passphrase }
 }
 
 /* --------------------------- réception --------------------------- */
 
-async function startReceive (win, rawCode) {
+async function startReceive (win, rawCode, opts = {}) {
   await teardownSession()
 
   const code = normalizeCode(rawCode)
   if (!code) {
     throw new Error('Code invalide. Le format attendu est « MOT-1234 ».')
   }
+  const passphrase = typeof opts.passphrase === 'string' ? opts.passphrase.trim() : ''
 
-  const session = new SwarmSession({ code, role: 'receiver' })
+  const session = new SwarmSession({ code, role: 'receiver', passphrase })
   current = { swarmSession: session, transfer: null, role: 'receiver' }
 
   session.on('peer-connected', () => emitToRenderer(win, 'peer-connected'))
@@ -226,16 +316,28 @@ async function startReceive (win, rawCode) {
   session.on('peer-authenticated', ({ frames, connectionType }) => {
     emitToRenderer(win, 'peer-authenticated', { connectionType })
 
-    const receiver = new TransferReceiver(frames)
+    const receiver = new TransferReceiver(frames, { resumeDir: resumeDir() })
     if (current) current.transfer = receiver
 
-    receiver.on('offer', (offer) =>
-      emitToRenderer(win, 'offer', { ...offer, defaultDir: defaultDownloadDir() }))
+    receiver.on('offer', (offer) => {
+      notify(win, 'NeoDrop', `${offer.sender} veut vous envoyer des fichiers.`)
+      emitToRenderer(win, 'offer', { ...offer, defaultDir: defaultDownloadDir() })
+    })
     receiver.on('progress', (p) => emitToRenderer(win, 'progress', p))
     receiver.on('file-done', (f) => emitToRenderer(win, 'file-done', f))
     receiver.on('done', ({ files }) => {
+      pushHistory({
+        direction: 'receive',
+        count: files.length,
+        totalSize: files.reduce((a, f) => a + (f.size || 0), 0),
+        names: files.slice(0, 5).map((f) => f.name)
+      })
+      notify(win, 'NeoDrop', `Fichiers reçus (${files.length}). Intégrité vérifiée.`)
       emitToRenderer(win, 'done', { files })
-      teardownSession()
+      // Le DONE_ACK vient d'être envoyé : on laisse l'expéditeur le recevoir
+      // et fermer en douceur avant de démonter la session, sinon il verrait
+      // une coupure au lieu d'un succès.
+      setTimeout(() => teardownSession(), 1500)
     })
     receiver.on('cancelled', ({ by, rejected }) => {
       emitToRenderer(win, 'cancelled', { by, rejected })
@@ -254,17 +356,17 @@ async function startReceive (win, rawCode) {
 /* ------------------------- enregistrement ------------------------ */
 
 function registerIpcHandlers (getWindow) {
-  ipcMain.handle('send:start', async (_e, filePaths) => {
+  ipcMain.handle('send:start', async (_e, filePaths, opts) => {
     try {
-      return await startSend(getWindow(), filePaths)
+      return await startSend(getWindow(), filePaths, opts || {})
     } catch (err) {
       return { error: humanError(err) }
     }
   })
 
-  ipcMain.handle('receive:start', async (_e, code) => {
+  ipcMain.handle('receive:start', async (_e, code, opts) => {
     try {
-      return await startReceive(getWindow(), code)
+      return await startReceive(getWindow(), code, opts || {})
     } catch (err) {
       return { error: humanError(err) }
     }
@@ -277,8 +379,22 @@ function registerIpcHandlers (getWindow) {
     const cfg = loadConfig()
     cfg.defaultDir = dir // mémorise le dossier choisi pour la prochaine fois
     saveConfig(cfg)
-    current.transfer.accept(dir)
+    await current.transfer.accept(dir)
     return { ok: true }
+  })
+
+  ipcMain.handle('history:get', async () => loadHistory())
+
+  ipcMain.handle('history:clear', async () => {
+    const cfg = loadConfig()
+    delete cfg.history
+    saveConfig(cfg)
+    return { ok: true }
+  })
+
+  // Lecture du presse-papier : pré-remplissage du code côté destinataire (#7).
+  ipcMain.handle('clipboard:read', async () => {
+    try { return clipboard.readText() } catch { return '' }
   })
 
   ipcMain.handle('receive:reject', async () => {

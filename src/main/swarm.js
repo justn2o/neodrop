@@ -118,25 +118,30 @@ function authenticate (frames, { authKey, role, timeout = AUTH_TIMEOUT_MS }) {
  *   'error'
  */
 class SwarmSession extends EventEmitter {
-  constructor ({ code, role, swarmOpts = null }) {
+  constructor ({ code, role, swarmOpts = null, passphrase = '', lan = true }) {
     super()
     this.code = code
     this.role = role // 'sender' | 'receiver'
+    this.passphrase = passphrase // passphrase optionnelle (renforce la dérivation)
     // Options Hyperswarm alternatives (tests : DHT locale via bootstrap).
     // null = DHT publique avec auto-détection du pare-feu.
     this.swarmOpts = swarmOpts
+    // Découverte LAN (mDNS) en complément de la DHT. Désactivée quand on
+    // injecte une DHT de test (swarmOpts) pour garder les tests isolés.
+    this.lan = lan
     this.swarm = null
     this.authKey = null
     this.frames = null
     this.closed = false
     this.authFailures = 0
     this._discovery = null
+    this._lan = null
     this._timers = []
     this._pendingSockets = new Set()
   }
 
   async start () {
-    const { topic, authKey } = await deriveSecrets(this.code)
+    const { topic, authKey } = await deriveSecrets(this.code, this.passphrase)
     if (this.closed) return
     this.authKey = authKey
 
@@ -147,6 +152,18 @@ class SwarmSession extends EventEmitter {
     // joignable directement, la connexion s'établit dans un sens ou l'autre.
     this._discovery = this.swarm.join(topic, { server: true, client: true })
     this._discovery.flushed().catch(() => {})
+
+    // Découverte locale (mDNS) en parallèle : un pair sur le même réseau est
+    // trouvé bien plus vite. Best-effort : toute erreur la désactive en
+    // silence, la DHT prend le relais.
+    if (this.lan && !this.swarmOpts) {
+      try {
+        const { LanDiscovery } = require('./lan')
+        this._lan = new LanDiscovery(topic)
+        this._lan.on('connection', (socket, info) => this._onConnection(socket, info))
+        this._lan.start()
+      } catch { this._lan = null }
+    }
 
     if (this.role === 'sender') {
       this._addTimer(setTimeout(() => {
@@ -238,6 +255,7 @@ class SwarmSession extends EventEmitter {
     if (this.closed) return
     this.closed = true
     this._clearTimers()
+    if (this._lan) { try { this._lan.close() } catch {} this._lan = null }
     for (const s of this._pendingSockets) {
       try { s.destroy() } catch {}
     }
@@ -255,6 +273,7 @@ class SwarmSession extends EventEmitter {
  */
 function describeConnection (socket, info) {
   try {
+    if (info && info.lan) return 'directe (réseau local)'
     const raw = socket.rawStream
     if (raw && typeof raw.relayedBy !== 'undefined') {
       return raw.relayedBy ? 'relayée' : 'directe'

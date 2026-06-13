@@ -247,6 +247,79 @@ body {
 .center { text-align: center; }
 .hint { font-size: 13px; color: var(--muted); text-align: center; }
 
+/* ---------- options d'envoi ---------- */
+
+.options {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 14px;
+  font-size: 14px;
+}
+.options summary { cursor: pointer; font-weight: 600; padding: 4px 0; color: var(--muted); }
+.options[open] summary { color: var(--text); margin-bottom: 8px; }
+.option-row { margin: 10px 0; }
+.select, .text-input {
+  font-family: inherit;
+  font-size: 14px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  -webkit-user-select: text;
+  user-select: text;
+}
+.select:focus, .text-input:focus { border-color: var(--accent); outline: none; }
+.check-row {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 14px; margin-top: 8px; cursor: pointer;
+}
+.ghost-btn { align-self: center; color: var(--muted); border-color: transparent; background: transparent; }
+.ghost-btn:hover { color: var(--accent); border-color: var(--border); }
+
+/* ---------- QR code ---------- */
+
+.qr-code {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #fff;
+  image-rendering: pixelated;
+}
+
+/* ---------- miniatures ---------- */
+
+.file-row .thumb {
+  width: 34px; height: 34px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.file-row .name-wrap { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+
+/* ---------- historique ---------- */
+
+.history-list {
+  display: flex; flex-direction: column; gap: 8px;
+  flex: 1; overflow-y: auto;
+}
+.history-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-size: 14px;
+}
+.history-item .h-top { display: flex; justify-content: space-between; gap: 10px; }
+.history-item .h-dir { font-weight: 650; }
+.history-item .h-dir.send { color: var(--accent); }
+.history-item .h-dir.receive { color: #16a34a; }
+.history-item .h-when { color: var(--muted); font-size: 12px; }
+.history-item .h-files { color: var(--muted); font-size: 13px; margin-top: 4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ---------- confirmation ---------- */
 
 .confirm-text { font-size: 15px; }
