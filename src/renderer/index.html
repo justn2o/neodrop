@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy"
@@ -9,136 +9,136 @@
 </head>
 <body>
 
-  <!-- Accueil -->
+  <!-- Home -->
   <section id="screen-home" class="screen active">
     <div class="brand">
-      <div class="logo">⇄</div>
+      <div class="logo">&#8644;</div>
       <h1>NeoDrop</h1>
-      <p class="tagline">Transfert de fichiers pair-à-pair,<br>sans serveur, chiffré de bout en bout.</p>
+      <p class="tagline">Peer-to-peer file transfer,<br>no server, end-to-end encrypted.</p>
     </div>
     <div class="home-actions">
       <button id="btn-go-send" class="big-btn primary">
-        <span class="big-btn-icon">↑</span>
-        <span class="big-btn-label">Envoyer</span>
-        <span class="big-btn-sub">Partager des fichiers avec un code</span>
+        <span class="big-btn-icon">&#8593;</span>
+        <span class="big-btn-label">Send</span>
+        <span class="big-btn-sub">Share files with a code</span>
       </button>
       <button id="btn-go-receive" class="big-btn">
-        <span class="big-btn-icon">↓</span>
-        <span class="big-btn-label">Recevoir</span>
-        <span class="big-btn-sub">Saisir le code reçu</span>
+        <span class="big-btn-icon">&#8595;</span>
+        <span class="big-btn-label">Receive</span>
+        <span class="big-btn-sub">Enter the code you received</span>
       </button>
     </div>
-    <button id="btn-go-history" class="btn small-btn ghost-btn">Historique des transferts</button>
+    <button id="btn-go-history" class="btn small-btn ghost-btn">Transfer history</button>
   </section>
 
-  <!-- Envoyer : choix des fichiers -->
+  <!-- Send: pick files -->
   <section id="screen-send" class="screen">
     <header class="screen-header">
-      <button class="back-btn" data-back>←</button>
-      <h2>Envoyer des fichiers</h2>
+      <button class="back-btn" data-back>&#8592;</button>
+      <h2>Send files</h2>
     </header>
     <div id="drop-zone" class="drop-zone" tabindex="0">
-      <div class="drop-icon">⤓</div>
-      <p>Glisse tes fichiers ou un dossier ici</p>
-      <p class="muted">ou</p>
+      <div class="drop-icon">&#10515;</div>
+      <p>Drag your files or a folder here</p>
+      <p class="muted">or</p>
       <div class="drop-actions">
-        <button id="btn-browse" class="btn">Fichiers…</button>
-        <button id="btn-browse-folder" class="btn">Dossier…</button>
+        <button id="btn-browse" class="btn">Files&hellip;</button>
+        <button id="btn-browse-folder" class="btn">Folder&hellip;</button>
       </div>
     </div>
 
     <details id="send-options" class="options">
       <summary>Options</summary>
       <div class="option-row">
-        <label class="field-label" for="opt-strength">Robustesse du code</label>
+        <label class="field-label" for="opt-strength">Code strength</label>
         <select id="opt-strength" class="select">
-          <option value="normal">Normal (1 mot)</option>
-          <option value="high">Renforcé (2 mots)</option>
-          <option value="max">Maximal (3 mots)</option>
+          <option value="normal">Normal (1 word)</option>
+          <option value="high">Stronger (2 words)</option>
+          <option value="max">Maximum (3 words)</option>
         </select>
       </div>
       <div class="option-row">
-        <label class="field-label" for="opt-pass">Passphrase (optionnelle)</label>
+        <label class="field-label" for="opt-pass">Passphrase (optional)</label>
         <input id="opt-pass" class="text-input" type="password" autocomplete="off"
-               placeholder="Exigée en plus du code">
+               placeholder="Required in addition to the code">
       </div>
       <div class="option-row">
-        <label class="field-label" for="opt-limit">Limite de débit (Mo/s, 0 = illimité)</label>
+        <label class="field-label" for="opt-limit">Speed limit (MB/s, 0 = unlimited)</label>
         <input id="opt-limit" class="text-input" type="number" min="0" step="1" value="0">
       </div>
       <label class="check-row"><input id="opt-compress" type="checkbox" checked>
-        Compresser les fichiers compressibles (texte, etc.)</label>
+        Compress compressible files (text, etc.)</label>
     </details>
 
-    <p class="hint">Un code d'appairage sera généré dès la sélection.</p>
+    <p class="hint">A pairing code is generated as soon as you select.</p>
   </section>
 
-  <!-- Envoyer : code affiché, attente du destinataire -->
+  <!-- Send: code shown, waiting -->
   <section id="screen-wait" class="screen">
     <header class="screen-header">
-      <h2>Code d'appairage</h2>
+      <h2>Pairing code</h2>
     </header>
     <div class="code-box">
-      <div id="pairing-code" class="pairing-code">·····</div>
-      <img id="qr-code" class="qr-code hidden" alt="QR code du code d'appairage" width="180" height="180">
-      <button id="btn-copy" class="btn">Copier</button>
-      <p id="pass-reminder" class="muted small hidden">🔒 Une passphrase est requise pour ce transfert.</p>
+      <div id="pairing-code" class="pairing-code">&middot;&middot;&middot;&middot;&middot;</div>
+      <img id="qr-code" class="qr-code hidden" alt="Pairing code QR" width="180" height="180">
+      <button id="btn-copy" class="btn">Copy</button>
+      <p id="pass-reminder" class="muted small hidden">&#128274; A passphrase is required for this transfer.</p>
       <p id="code-expiry" class="muted small"></p>
     </div>
     <div id="wait-files" class="file-summary"></div>
     <div class="status-line">
       <span class="spinner" id="wait-spinner"></span>
-      <span id="wait-status">En attente du destinataire…</span>
+      <span id="wait-status">Waiting for the recipient&hellip;</span>
     </div>
-    <p class="hint">Communique ce code au destinataire. Il est à usage unique et expire après 15 minutes.</p>
-    <button id="btn-cancel-wait" class="btn danger-outline">Annuler</button>
+    <p class="hint">Share this code with the recipient. It is single-use and expires after 15 minutes.</p>
+    <button id="btn-cancel-wait" class="btn danger-outline">Cancel</button>
   </section>
 
-  <!-- Recevoir : saisie du code -->
+  <!-- Receive: enter code -->
   <section id="screen-receive" class="screen">
     <header class="screen-header">
-      <button class="back-btn" data-back>←</button>
-      <h2>Recevoir des fichiers</h2>
+      <button class="back-btn" data-back>&#8592;</button>
+      <h2>Receive files</h2>
     </header>
-    <label class="field-label" for="code-input">Code d'appairage</label>
-    <input id="code-input" class="code-input" type="text" placeholder="TIGRE-7342"
+    <label class="field-label" for="code-input">Pairing code</label>
+    <input id="code-input" class="code-input" type="text" placeholder="TIGER-7342"
            autocomplete="off" spellcheck="false" maxlength="40">
-    <label class="field-label" for="recv-pass">Passphrase (si l'expéditeur en a défini une)</label>
+    <label class="field-label" for="recv-pass">Passphrase (if the sender set one)</label>
     <input id="recv-pass" class="text-input" type="password" autocomplete="off"
-           placeholder="Laisser vide si aucune">
-    <button id="btn-connect" class="btn primary full">Se connecter</button>
+           placeholder="Leave empty if none">
+    <button id="btn-connect" class="btn primary full">Connect</button>
     <div id="receive-status" class="status-line hidden">
       <span class="spinner"></span>
-      <span id="receive-status-text">Recherche de l'expéditeur…</span>
+      <span id="receive-status-text">Looking for the sender&hellip;</span>
     </div>
-    <button id="btn-cancel-receive" class="btn danger-outline hidden">Annuler</button>
+    <button id="btn-cancel-receive" class="btn danger-outline hidden">Cancel</button>
   </section>
 
-  <!-- Confirmation côté destinataire -->
+  <!-- Confirmation on the recipient side -->
   <section id="screen-confirm" class="screen">
     <header class="screen-header">
-      <h2>Demande de transfert</h2>
+      <h2>Transfer request</h2>
     </header>
     <p id="confirm-text" class="confirm-text"></p>
     <div id="confirm-files" class="file-summary"></div>
     <div class="dest-row">
       <div>
-        <span class="field-label">Dossier de destination</span>
+        <span class="field-label">Destination folder</span>
         <span id="dest-dir" class="dest-path"></span>
       </div>
-      <button id="btn-change-dir" class="btn small-btn">Modifier…</button>
+      <button id="btn-change-dir" class="btn small-btn">Change&hellip;</button>
     </div>
     <div class="confirm-actions">
-      <button id="btn-accept" class="btn primary">Accepter</button>
-      <button id="btn-reject" class="btn danger-outline">Refuser</button>
+      <button id="btn-accept" class="btn primary">Accept</button>
+      <button id="btn-reject" class="btn danger-outline">Decline</button>
     </div>
-    <p class="hint">Rien n'est écrit sur le disque avant ton accord.</p>
+    <p class="hint">Nothing is written to disk before you accept.</p>
   </section>
 
-  <!-- Progression (commun envoi / réception) -->
+  <!-- Progress (shared send/receive) -->
   <section id="screen-progress" class="screen">
     <header class="screen-header">
-      <h2 id="progress-title">Transfert en cours…</h2>
+      <h2 id="progress-title">Transfer in progress&hellip;</h2>
     </header>
     <div id="conn-badge" class="conn-badge hidden"></div>
     <div class="progress-block">
@@ -148,43 +148,43 @@
       </div>
       <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
       <div class="progress-stats">
-        <span id="progress-speed">—</span>
-        <span id="progress-eta">—</span>
+        <span id="progress-speed">&mdash;</span>
+        <span id="progress-eta">&mdash;</span>
       </div>
       <div class="progress-meta small muted">
         <span id="progress-global"></span>
       </div>
     </div>
-    <button id="btn-cancel-transfer" class="btn danger-outline">Annuler</button>
+    <button id="btn-cancel-transfer" class="btn danger-outline">Cancel</button>
   </section>
 
-  <!-- Succès -->
+  <!-- Success -->
   <section id="screen-done" class="screen">
-    <div class="result-icon ok">✓</div>
-    <h2 id="done-title">Transfert terminé</h2>
+    <div class="result-icon ok">&#10003;</div>
+    <h2 id="done-title">Transfer complete</h2>
     <p id="done-text" class="muted center"></p>
     <div id="done-files" class="file-summary"></div>
-    <button id="btn-open-folder" class="btn hidden">Ouvrir le dossier</button>
-    <button id="btn-done-home" class="btn primary full">Nouveau transfert</button>
+    <button id="btn-open-folder" class="btn hidden">Open folder</button>
+    <button id="btn-done-home" class="btn primary full">New transfer</button>
   </section>
 
-  <!-- Erreur -->
+  <!-- Error -->
   <section id="screen-error" class="screen">
-    <div class="result-icon err">✕</div>
-    <h2>Oups</h2>
+    <div class="result-icon err">&#10007;</div>
+    <h2>Oops</h2>
     <p id="error-text" class="error-text"></p>
-    <button id="btn-error-home" class="btn primary full">Retour à l'accueil</button>
+    <button id="btn-error-home" class="btn primary full">Back to home</button>
   </section>
 
-  <!-- Historique -->
+  <!-- History -->
   <section id="screen-history" class="screen">
     <header class="screen-header">
-      <button class="back-btn" data-back>←</button>
-      <h2>Historique</h2>
+      <button class="back-btn" data-back>&#8592;</button>
+      <h2>History</h2>
     </header>
     <div id="history-list" class="history-list"></div>
-    <p id="history-empty" class="hint hidden">Aucun transfert pour le moment.</p>
-    <button id="btn-clear-history" class="btn danger-outline">Effacer l'historique</button>
+    <p id="history-empty" class="hint hidden">No transfers yet.</p>
+    <button id="btn-clear-history" class="btn danger-outline">Clear history</button>
   </section>
 
   <script src="app.js"></script>

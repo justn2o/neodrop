@@ -1,34 +1,18 @@
 'use strict'
 
-/**
- * Découverte des pairs via la DHT publique Hyperswarm et authentification
- * mutuelle par challenge-réponse.
- *
- * Les deux pairs rejoignent le topic dérivé du code (voir code.js). Les
- * sockets Hyperswarm sont chiffrées de bout en bout (protocole Noise)
- * nativement. Par-dessus, chaque pair prouve qu'il connaît le code sans
- * jamais le transmettre :
- *
- *   A → B : HELLO { nonce_A, role_A }
- *   B → A : HELLO { nonce_B, role_B }
- *   A → B : AUTH  { mac = HMAC-SHA256(authKey, cb || nonce_B || role_A) }
- *   B → A : AUTH  { mac = HMAC-SHA256(authKey, cb || nonce_A || role_B) }
- *   les deux : AUTH_OK si la preuve reçue est valide, sinon déconnexion.
- *
- * Le rôle (sender/receiver) est inclus dans le HMAC pour empêcher une
- * attaque par réflexion (renvoyer la preuve de l'autre pair).
- *
- * « cb » est la LIAISON DE CANAL : le handshakeHash du canal Noise sous-jacent
- * (identique aux deux bouts d'une même session, différent sur chaque jambe d'un
- * relais). En l'incluant dans le HMAC, un attaquant qui s'interposerait (relais
- * sur la DHT ou sur le LAN) ne peut plus se contenter de RELAYER les preuves :
- * la preuve de A est liée au canal A↔relais, invalide sur le canal relais↔B.
- * Si la socket n'expose pas de handshakeHash (sockets TCP nues des tests), cb
- * vaut une chaîne vide aux deux bouts — la logique reste vérifiable.
- *
- * Côté expéditeur : 3 échecs d'authentification invalident le code.
- * Le code expire après 15 minutes sans transfert (usage unique).
- */
+// Peer discovery over the public Hyperswarm DHT (and mDNS on a LAN) plus a
+// mutual challenge-response that proves both sides know the code without ever
+// sending it:
+//
+//   A -> B : HELLO { nonce_A, role_A }
+//   B -> A : HELLO { nonce_B, role_B }
+//   A -> B : AUTH  { mac = HMAC-SHA256(authKey, cb || nonce_B || role_A) }
+//   B -> A : AUTH  { mac = HMAC-SHA256(authKey, cb || nonce_A || role_B) }
+//
+// The role is in the MAC to block a reflection attack. "cb" is a channel
+// binding: the Noise handshakeHash, identical on both ends of one connection
+// but different on each leg of a relay, so a man-in-the-middle cannot just
+// forward the proofs. Sender invalidates the code after 3 failed attempts.
 
 const crypto = require('crypto')
 const { EventEmitter } = require('events')
@@ -37,25 +21,17 @@ const b4a = require('b4a')
 const { deriveSecrets } = require('./code')
 const { FrameStream } = require('./transfer')
 
-const CODE_TTL_MS = 15 * 60 * 1000 // expiration du code : 15 minutes
-const JOIN_TIMEOUT_MS = 30 * 1000 // côté destinataire : 30 s pour trouver le pair
-const AUTH_TIMEOUT_MS = 15 * 1000 // délai max pour le challenge-réponse
-const MAX_AUTH_FAILURES = 3 // côté expéditeur : 3 échecs → code invalidé
-// Fenêtre de collecte des connexions authentifiées concurrentes (LAN + DHT)
-// avant de retenir, de façon déterministe, la même des deux côtés.
+const CODE_TTL_MS = 15 * 60 * 1000
+const JOIN_TIMEOUT_MS = 30 * 1000
+const AUTH_TIMEOUT_MS = 15 * 1000
+const MAX_AUTH_FAILURES = 3
+// Window to gather concurrent authenticated connections (LAN + DHT) before
+// deterministically keeping the same one on both sides.
 const SELECT_WINDOW_MS = 400
 
-/**
- * Challenge-réponse mutuel sur une FrameStream : chaque pair prouve la
- * connaissance du code via HMAC(authKey, nonce_du_pair || son_rôle), sans
- * jamais transmettre le code. Résout true si le pair est authentifié.
- */
-/**
- * Liaison de canal : le handshakeHash du canal Noise sous-jacent, identique
- * aux deux extrémités d'une même session. Vide si la socket n'en expose pas
- * (sockets TCP nues des tests) — les deux bouts utilisent alors la même valeur
- * vide, ce qui reste cohérent.
- */
+// The Noise handshakeHash, identical on both ends of one connection. Empty if
+// the socket doesn't expose one (bare TCP in tests) — both ends then use the
+// same empty value, which stays consistent.
 function channelBinding (frames) {
   const s = frames && frames.socket
   const hh = s && (s.handshakeHash || (s.rawStream && s.rawStream.handshakeHash))
@@ -79,8 +55,6 @@ function authenticate (frames, { authKey, role, timeout = AUTH_TIMEOUT_MS }) {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      // Retire TOUS les écouteurs posés ici : sinon error/close restent
-      // attachés à la FrameStream après l'auth et fuient leurs closures.
       frames.off('json', onJson)
       frames.off('error', onError)
       frames.off('close', onClose)
@@ -89,11 +63,8 @@ function authenticate (frames, { authKey, role, timeout = AUTH_TIMEOUT_MS }) {
 
     const onJson = (msg) => {
       try {
-        // Liaison de canal : capturée à réception (le handshake Noise est alors
-        // terminé, les données ne circulant qu'après). Identique aux deux bouts.
         const cb = channelBinding(frames)
         if (msg.t === 'HELLO') {
-          // Le rôle du pair doit être l'opposé du nôtre (anti-réflexion).
           if (peerNonce || msg.role !== peerRole) return settle(false)
           peerNonce = b4a.from(String(msg.nonce), 'hex')
           if (peerNonce.length !== 16) return settle(false)
@@ -116,7 +87,7 @@ function authenticate (frames, { authKey, role, timeout = AUTH_TIMEOUT_MS }) {
           authOkReceived = true
           if (peerProofOk) settle(true)
         } else {
-          settle(false) // tout autre message avant la fin de l'auth est hostile
+          settle(false)
         }
       } catch {
         settle(false)
@@ -130,30 +101,16 @@ function authenticate (frames, { authKey, role, timeout = AUTH_TIMEOUT_MS }) {
   })
 }
 
-/**
- * Une session de rendez-vous : rejoint le topic, authentifie le premier
- * pair valide et expose la FrameStream prête pour le transfert.
- *
- * Événements :
- *   'peer-connected'      un pair a ouvert une connexion (avant auth)
- *   'peer-authenticated'  ({ frames, connectionType }) prêt à transférer
- *   'auth-failed'         ({ failures, remaining }) mauvaise preuve reçue
- *   'invalidated'         3 échecs côté expéditeur → code mort
- *   'expired'             15 minutes sans pair authentifié
- *   'timeout'             (destinataire) personne trouvé en 30 s
- *   'error'
- */
+// Joins the topic, authenticates the first valid peer and exposes a ready
+// FrameStream. Events: 'peer-connected', 'peer-authenticated', 'auth-failed',
+// 'invalidated', 'expired', 'timeout', 'error'.
 class SwarmSession extends EventEmitter {
   constructor ({ code, role, swarmOpts = null, passphrase = '', lan = true }) {
     super()
     this.code = code
-    this.role = role // 'sender' | 'receiver'
-    this.passphrase = passphrase // passphrase optionnelle (renforce la dérivation)
-    // Options Hyperswarm alternatives (tests : DHT locale via bootstrap).
-    // null = DHT publique avec auto-détection du pare-feu.
+    this.role = role
+    this.passphrase = passphrase
     this.swarmOpts = swarmOpts
-    // Découverte LAN (mDNS) en complément de la DHT. Désactivée quand on
-    // injecte une DHT de test (swarmOpts) pour garder les tests isolés.
     this.lan = lan
     this.swarm = null
     this.authKey = null
@@ -164,7 +121,7 @@ class SwarmSession extends EventEmitter {
     this._lan = null
     this._timers = []
     this._pendingSockets = new Set()
-    this._candidates = [] // connexions authentifiées en attente de sélection
+    this._candidates = []
     this._selectTimer = null
     this._selected = false
   }
@@ -177,14 +134,11 @@ class SwarmSession extends EventEmitter {
     this.swarm = new Hyperswarm(this.swarmOpts || {})
     this.swarm.on('connection', (socket, info) => this._onConnection(socket, info))
 
-    // Les deux côtés s'annoncent ET cherchent : peu importe qui est
-    // joignable directement, la connexion s'établit dans un sens ou l'autre.
+    // Both sides announce AND look up, so the connection forms either way.
     this._discovery = this.swarm.join(topic, { server: true, client: true })
     this._discovery.flushed().catch(() => {})
 
-    // Découverte locale (mDNS) en parallèle : un pair sur le même réseau est
-    // trouvé bien plus vite. Best-effort : toute erreur la désactive en
-    // silence, la DHT prend le relais.
+    // LAN (mDNS) discovery in parallel; best-effort, DHT takes over on failure.
     if (this.lan && !this.swarmOpts) {
       try {
         const { LanDiscovery } = require('./lan')
@@ -212,15 +166,13 @@ class SwarmSession extends EventEmitter {
   }
 
   _onConnection (socket, info) {
-    if (this.closed || this.frames) {
-      // Déjà appairé : on refuse poliment les connexions supplémentaires.
+    if (this.closed || this._selected) {
       socket.destroy()
       return
     }
     this._pendingSockets.add(socket)
     socket.on('close', () => this._pendingSockets.delete(socket))
-    socket.on('error', () => {}) // les erreurs pré-auth ne sont pas fatales
-    // Détection rapide d'une connexion morte pendant le transfert.
+    socket.on('error', () => {})
     if (typeof socket.setKeepAlive === 'function') socket.setKeepAlive(5000)
 
     this.emit('peer-connected')
@@ -229,7 +181,6 @@ class SwarmSession extends EventEmitter {
     })
   }
 
-  /** Challenge-réponse mutuel sur cette connexion. */
   async _authenticate (socket, info) {
     const frames = new FrameStream(socket)
     const result = await authenticate(frames, { authKey: this.authKey, role: this.role })
@@ -246,8 +197,6 @@ class SwarmSession extends EventEmitter {
         failures: this.authFailures,
         remaining: MAX_AUTH_FAILURES - this.authFailures
       })
-      // Seul l'expéditeur invalide son code : c'est lui qui est attaquable
-      // par des tentatives répétées sur le topic.
       if (this.role === 'sender' && this.authFailures >= MAX_AUTH_FAILURES) {
         this.emit('invalidated')
         this.close()
@@ -256,22 +205,18 @@ class SwarmSession extends EventEmitter {
     }
 
     if (this._selected) {
-      frames.destroy() // sélection déjà faite : connexion surnuméraire
+      frames.destroy()
       return
     }
     this._addCandidate(frames, socket, info)
   }
 
-  /**
-   * Plusieurs canaux peuvent s'authentifier en parallèle entre les MÊMES deux
-   * pairs : la connexion DHT et jusqu'à deux connexions LAN croisées. Si chaque
-   * pair gardait « le premier arrivé », les deux pourraient retenir des
-   * connexions DIFFÉRENTES et se couper mutuellement (« connexion perdue » des
-   * deux côtés). On collecte donc les candidats pendant une courte fenêtre,
-   * puis on retient de façon DÉTERMINISTE : le handshakeHash du canal Noise est
-   * identique aux deux bouts d'une même connexion, donc min(handshakeHash)
-   * désigne la même connexion chez les deux pairs.
-   */
+  // Several channels can authenticate at once between the SAME two peers (DHT
+  // plus up to two crossed LAN connections). Keeping "first one wins" lets each
+  // side keep a DIFFERENT connection and cut the other (both see a lost
+  // connection). So we collect candidates briefly, then keep one
+  // deterministically: the Noise handshakeHash is identical on both ends of a
+  // connection, so min(handshakeHash) picks the same one for both peers.
   _addCandidate (frames, socket, info) {
     if (this.closed) { frames.destroy(); return }
     this._candidates.push({ frames, socket, info, hh: channelBinding(frames) })
@@ -290,22 +235,20 @@ class SwarmSession extends EventEmitter {
     this._selectTimer = null
     if (this.closed || this._selected) return
     const alive = this._candidates.filter((c) => !c.frames.destroyed)
-    if (alive.length === 0) return // tous tombés : on attend une nouvelle connexion
-    // Choix déterministe et identique des deux côtés : plus petit handshakeHash.
+    if (alive.length === 0) return
     alive.sort((a, b) => b4a.compare(a.hh, b.hh))
     const chosen = alive[0]
     this._selected = true
     this._candidates = []
     for (const c of alive) if (c.frames !== chosen.frames) c.frames.destroy()
     this.frames = chosen.frames
-    this._clearTimers() // le pair est là : plus d'expiration de rendez-vous
+    this._clearTimers()
     this.emit('peer-authenticated', {
       frames: chosen.frames,
       connectionType: describeConnection(chosen.socket, chosen.info)
     })
   }
 
-  /** Résout quand l'annonce sur la DHT est complètement propagée. */
   async flushed () {
     if (this._discovery) await this._discovery.flushed()
   }
@@ -336,18 +279,15 @@ class SwarmSession extends EventEmitter {
   }
 }
 
-/**
- * Décrit le type de connexion pour l'UI (« directe » ou « relayée »),
- * dans la mesure où l'information est exposée par la pile UDX.
- */
+// Best-effort description of the connection type for the UI.
 function describeConnection (socket, info) {
   try {
-    if (info && info.lan) return 'directe (réseau local)'
+    if (info && info.lan) return 'direct (local network)'
     const raw = socket.rawStream
     if (raw && typeof raw.relayedBy !== 'undefined') {
-      return raw.relayedBy ? 'relayée' : 'directe'
+      return raw.relayedBy ? 'relayed' : 'direct'
     }
-    if (info && typeof info.client === 'boolean') return 'directe'
+    if (info && typeof info.client === 'boolean') return 'direct'
   } catch {}
   return null
 }

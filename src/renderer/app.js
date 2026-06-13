@@ -1,11 +1,7 @@
 'use strict'
 
-/**
- * Logique de l'interface NeoDrop. Aucun accès réseau/disque ici :
- * tout passe par window.api (preload) et les événements « session-event ».
- */
-
-/* ------------------------- utilitaires DOM ------------------------ */
+// NeoDrop UI logic. No network/disk access here: everything goes through
+// window.api (preload) and the "session-event" events.
 
 const $ = (id) => document.getElementById(id)
 
@@ -22,7 +18,6 @@ function renderFileList (container, files) {
 
     const wrap = document.createElement('div')
     wrap.className = 'name-wrap'
-    // Miniature d'aperçu si disponible (images).
     if (f.thumb) {
       const img = document.createElement('img')
       img.className = 'thumb'
@@ -32,7 +27,6 @@ function renderFileList (container, files) {
     }
     const name = document.createElement('span')
     name.className = 'name'
-    // Pour un dossier, on montre le chemin relatif (arborescence) si dispo.
     name.textContent = f.relPath || f.name
     wrap.appendChild(name)
 
@@ -44,16 +38,14 @@ function renderFileList (container, files) {
   }
 }
 
-/* ------------------------- formats français ----------------------- */
-
 function formatBytes (bytes) {
   if (!Number.isFinite(bytes)) return '—'
-  if (bytes < 1024) return `${bytes} o`
-  const units = ['Ko', 'Mo', 'Go', 'To']
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
   let v = bytes
   let i = -1
   do { v /= 1024; i++ } while (v >= 1024 && i < units.length - 1)
-  return `${v.toLocaleString('fr-FR', { maximumFractionDigits: v < 10 ? 1 : 0 })} ${units[i]}`
+  return `${v.toLocaleString('en-US', { maximumFractionDigits: v < 10 ? 1 : 0 })} ${units[i]}`
 }
 
 function formatSpeed (bytesPerSec) {
@@ -63,16 +55,14 @@ function formatSpeed (bytesPerSec) {
 
 function formatEta (seconds) {
   if (seconds == null) return '—'
-  if (seconds < 60) return `${seconds} s restantes`
+  if (seconds < 60) return `${seconds} s left`
   const m = Math.floor(seconds / 60)
   const s = seconds % 60
-  if (m < 60) return `${m} min ${String(s).padStart(2, '0')} restantes`
-  return `${Math.floor(m / 60)} h ${m % 60} min restantes`
+  if (m < 60) return `${m} min ${String(s).padStart(2, '0')} left`
+  return `${Math.floor(m / 60)} h ${m % 60} min left`
 }
 
-/* ----------------------------- état ------------------------------- */
-
-let role = null // 'sender' | 'receiver'
+let role = null
 let currentOffer = null
 let destDir = null
 let receivedFiles = []
@@ -91,7 +81,6 @@ function resetState () {
 function goHome () {
   window.api.cancel()
   resetState()
-  // Réinitialise les éléments transitoires.
   $('code-input').value = ''
   $('recv-pass').value = ''
   $('receive-status').classList.add('hidden')
@@ -104,13 +93,10 @@ function goHome () {
   showScreen('screen-home')
 }
 
-/* ------------------------- navigation ----------------------------- */
-
 $('btn-go-send').addEventListener('click', () => { role = 'sender'; showScreen('screen-send') })
 $('btn-go-receive').addEventListener('click', async () => {
   role = 'receiver'
   showScreen('screen-receive')
-  // Pré-remplit le code si le presse-papier en contient un (#7).
   if (!$('code-input').value) {
     try {
       const text = await window.api.readClipboard()
@@ -134,12 +120,9 @@ function showError (message) {
   showScreen('screen-error')
 }
 
-/* ------------------------- historique ----------------------------- */
-
 function formatDate (ts) {
   try {
-    return new Date(ts).toLocaleString('fr-FR',
-      { dateStyle: 'short', timeStyle: 'short' })
+    return new Date(ts).toLocaleString('en-US', { dateStyle: 'short', timeStyle: 'short' })
   } catch { return '' }
 }
 
@@ -151,13 +134,13 @@ async function showHistory () {
   for (const h of list) {
     const item = document.createElement('div')
     item.className = 'history-item'
-    const dir = h.direction === 'send' ? 'Envoyé' : 'Reçu'
+    const dir = h.direction === 'send' ? 'Sent' : 'Received'
     const names = (h.names || []).join(', ') + (h.count > (h.names || []).length ? '…' : '')
     const top = document.createElement('div')
     top.className = 'h-top'
     const d = document.createElement('span')
     d.className = `h-dir ${h.direction}`
-    d.textContent = `${h.direction === 'send' ? '↑' : '↓'} ${dir} · ${h.count} fichier(s) · ${formatBytes(h.totalSize)}`
+    d.textContent = `${h.direction === 'send' ? '↑' : '↓'} ${dir} · ${h.count} file(s) · ${formatBytes(h.totalSize)}`
     const when = document.createElement('span')
     when.className = 'h-when'
     when.textContent = formatDate(h.at)
@@ -176,7 +159,7 @@ $('btn-clear-history').addEventListener('click', async () => {
   showHistory()
 })
 
-/* --------------------------- envoi -------------------------------- */
+/* send */
 
 const dropZone = $('drop-zone')
 
@@ -221,15 +204,12 @@ function readSendOptions () {
 
 async function startSending (paths) {
   role = 'sender'
-  // Préparation des fichiers/dossiers (calcul des hash, arborescence) :
-  // sur un gros dossier cela peut prendre un instant.
-  $('wait-status').textContent = 'Préparation…'
+  $('wait-status').textContent = 'Preparing…'
   const res = await window.api.startSend(paths, readSendOptions())
   if (res.error) return showError(res.error)
 
   $('pairing-code').textContent = res.code
-  $('wait-status').textContent = 'En attente du destinataire…'
-  // QR code (scan rapide depuis un téléphone).
+  $('wait-status').textContent = 'Waiting for the recipient…'
   const qr = $('qr-code')
   if (res.qr) { qr.src = res.qr; qr.classList.remove('hidden') } else { qr.classList.add('hidden') }
   $('pass-reminder').classList.toggle('hidden', !res.passphrase)
@@ -237,7 +217,7 @@ async function startSending (paths) {
   if (res.folder) {
     const n = (res.files || []).length
     $('wait-files').insertAdjacentHTML('afterbegin',
-      `<div class="file-row"><span class="name">📁 Dossier — ${n} fichier(s)</span></div>`)
+      `<div class="file-row"><span class="name">📁 Folder — ${n} file(s)</span></div>`)
   }
   startExpiryCountdown(res.expiresAt)
   showScreen('screen-wait')
@@ -246,8 +226,8 @@ async function startSending (paths) {
 $('btn-copy').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText($('pairing-code').textContent)
-    $('btn-copy').textContent = 'Copié ✓'
-    setTimeout(() => { $('btn-copy').textContent = 'Copier' }, 1500)
+    $('btn-copy').textContent = 'Copied ✓'
+    setTimeout(() => { $('btn-copy').textContent = 'Copy' }, 1500)
   } catch {}
 })
 
@@ -257,7 +237,7 @@ function startExpiryCountdown (expiresAt) {
     const left = Math.max(0, expiresAt - Date.now())
     const m = Math.floor(left / 60000)
     const s = Math.floor((left % 60000) / 1000)
-    $('code-expiry').textContent = `Expire dans ${m} min ${String(s).padStart(2, '0')} s`
+    $('code-expiry').textContent = `Expires in ${m} min ${String(s).padStart(2, '0')} s`
     if (left <= 0) stopExpiryCountdown()
   }
   tick()
@@ -269,7 +249,7 @@ function stopExpiryCountdown () {
   $('code-expiry').textContent = ''
 }
 
-/* -------------------------- réception ----------------------------- */
+/* receive */
 
 $('btn-connect').addEventListener('click', connect)
 $('code-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') connect() })
@@ -281,7 +261,7 @@ async function connect () {
   $('btn-connect').disabled = true
   $('receive-status').classList.remove('hidden')
   $('btn-cancel-receive').classList.remove('hidden')
-  $('receive-status-text').textContent = "Recherche de l'expéditeur…"
+  $('receive-status-text').textContent = 'Looking for the sender…'
 
   const res = await window.api.startReceive(code, { passphrase: $('recv-pass').value || '' })
   if (res.error) {
@@ -304,7 +284,7 @@ $('btn-accept').addEventListener('click', async () => {
   $('btn-accept').disabled = true
   $('btn-reject').disabled = true
   await window.api.accept(destDir)
-  $('progress-title').textContent = 'Réception en cours…'
+  $('progress-title').textContent = 'Receiving…'
   $('progress-fill').style.width = '0%'
   showScreen('screen-progress')
   showConnBadge()
@@ -319,11 +299,9 @@ $('btn-open-folder').addEventListener('click', () => {
   if (receivedFiles.length > 0) window.api.showInFolder(receivedFiles[0].path)
 })
 
-/* ----------------------- événements de session -------------------- */
-
 function showConnBadge () {
   if (connectionType) {
-    $('conn-badge').textContent = `Connexion ${connectionType} chiffrée`
+    $('conn-badge').textContent = `${connectionType} encrypted connection`
     $('conn-badge').classList.remove('hidden')
   } else {
     $('conn-badge').classList.add('hidden')
@@ -332,16 +310,15 @@ function showConnBadge () {
 
 window.api.onEvent(({ type, data }) => {
   switch (type) {
-    /* --- communs --- */
     case 'peer-connected':
-      if (role === 'sender') $('wait-status').textContent = 'Pair trouvé, vérification du code…'
-      else $('receive-status-text').textContent = 'Expéditeur trouvé, vérification du code…'
+      if (role === 'sender') $('wait-status').textContent = 'Peer found, checking the code…'
+      else $('receive-status-text').textContent = 'Sender found, checking the code…'
       break
 
     case 'peer-authenticated':
       connectionType = data.connectionType
-      if (role === 'sender') $('wait-status').textContent = 'Destinataire connecté ✓'
-      else $('receive-status-text').textContent = 'Connecté ✓ En attente des détails…'
+      if (role === 'sender') $('wait-status').textContent = 'Recipient connected ✓'
+      else $('receive-status-text').textContent = 'Connected ✓ Waiting for details…'
       break
 
     case 'progress': {
@@ -350,24 +327,24 @@ window.api.onEvent(({ type, data }) => {
       $('progress-fill').style.width = `${pct}%`
       $('progress-file').textContent =
         data.fileCount > 1
-          ? `Fichier ${data.fileIndex + 1}/${data.fileCount} : ${data.fileName}`
+          ? `File ${data.fileIndex + 1}/${data.fileCount}: ${data.fileName}`
           : data.fileName
       $('progress-speed').textContent = formatSpeed(data.speed)
       $('progress-eta').textContent = formatEta(data.eta)
       $('progress-global').textContent =
-        `${formatBytes(data.totalBytes)} sur ${formatBytes(data.totalSize)}`
+        `${formatBytes(data.totalBytes)} of ${formatBytes(data.totalSize)}`
       break
     }
 
     case 'done':
       receivedFiles = (data && data.files) || []
-      $('done-title').textContent = 'Transfert terminé'
+      $('done-title').textContent = 'Transfer complete'
       if (role === 'receiver') {
-        $('done-text').textContent = 'Intégrité vérifiée (SHA-256). Fichiers enregistrés :'
+        $('done-text').textContent = 'Integrity verified (SHA-256). Files saved:'
         renderFileList($('done-files'), receivedFiles)
         $('btn-open-folder').classList.toggle('hidden', receivedFiles.length === 0)
       } else {
-        $('done-text').textContent = 'Le destinataire a bien reçu tous les fichiers. Intégrité vérifiée.'
+        $('done-text').textContent = 'The recipient received all files. Integrity verified.'
         $('done-files').innerHTML = ''
         $('btn-open-folder').classList.add('hidden')
       }
@@ -375,56 +352,54 @@ window.api.onEvent(({ type, data }) => {
       break
 
     case 'cancelled':
-      if (data && data.rejected) break // refus local : déjà revenu à l'accueil
+      if (data && data.rejected) break
       if (data && data.by === 'peer') {
         showError(role === 'sender'
-          ? 'Le destinataire a annulé ou refusé le transfert.'
-          : "L'expéditeur a annulé le transfert.")
+          ? 'The recipient cancelled or declined the transfer.'
+          : 'The sender cancelled the transfer.')
       } else {
         goHome()
       }
       break
 
     case 'error':
-      showError(data.message || 'Une erreur inattendue est survenue.')
+      showError(data.message || 'An unexpected error occurred.')
       break
 
-    /* --- côté expéditeur --- */
     case 'auth-failed':
       $('wait-status').textContent =
-        `Code erroné reçu (${data.failures}/3). Encore ${data.remaining} tentative(s) avant invalidation.`
+        `Wrong code received (${data.failures}/3). ${data.remaining} attempt(s) left before invalidation.`
       break
 
     case 'code-invalidated':
-      showError('Trop de tentatives avec un mauvais code : ce code est invalidé. Génère-en un nouveau.')
+      showError('Too many wrong-code attempts: this code is now invalid. Generate a new one.')
       break
 
     case 'code-expired':
-      showError("Le code a expiré (15 minutes sans connexion). Génère-en un nouveau.")
+      showError('The code expired (15 minutes with no connection). Generate a new one.')
       break
 
     case 'waiting-confirmation':
-      $('wait-status').textContent = 'En attente de la confirmation du destinataire…'
+      $('wait-status').textContent = 'Waiting for the recipient to confirm…'
       break
 
     case 'transfer-started':
-      $('progress-title').textContent = 'Envoi en cours…'
+      $('progress-title').textContent = 'Sending…'
       $('progress-fill').style.width = '0%'
       showScreen('screen-progress')
       showConnBadge()
       break
 
     case 'rejected':
-      showError('Le destinataire a refusé le transfert.')
+      showError('The recipient declined the transfer.')
       break
 
-    /* --- côté destinataire --- */
     case 'connect-timeout':
-      showError("Impossible de trouver l'expéditeur en 30 secondes. Vérifie le code et la connexion Internet, puis réessaie.")
+      showError('Could not find the sender within 30 seconds. Check the code and your internet connection, then try again.')
       break
 
     case 'auth-failed-receiver':
-      showError("Ce code ne correspond pas. Vérifie-le auprès de l'expéditeur.")
+      showError('This code does not match. Check it with the sender.')
       break
 
     case 'offer': {
@@ -433,16 +408,16 @@ window.api.onEvent(({ type, data }) => {
       const total = data.files.reduce((a, f) => a + f.size, 0)
       let fileDesc
       if (data.folder) {
-        fileDesc = `un dossier (${data.files.length} fichier(s), ${formatBytes(total)})`
+        fileDesc = `a folder (${data.files.length} file(s), ${formatBytes(total)})`
       } else if (data.files.length === 1) {
-        fileDesc = `« ${data.files[0].name} » (${formatBytes(total)})`
+        fileDesc = `"${data.files[0].name}" (${formatBytes(total)})`
       } else {
-        fileDesc = `${data.files.length} fichiers (${formatBytes(total)})`
+        fileDesc = `${data.files.length} files (${formatBytes(total)})`
       }
       $('confirm-text').innerHTML = ''
       const strong = document.createElement('strong')
       strong.textContent = data.sender
-      $('confirm-text').append(strong, ` veut vous envoyer ${fileDesc}.`)
+      $('confirm-text').append(strong, ` wants to send you ${fileDesc}.`)
       renderFileList($('confirm-files'), data.files)
       $('dest-dir').textContent = destDir
       $('btn-accept').disabled = false
@@ -452,6 +427,6 @@ window.api.onEvent(({ type, data }) => {
     }
 
     case 'file-done':
-      break // la progression suffit ; hook disponible si besoin
+      break
   }
 })

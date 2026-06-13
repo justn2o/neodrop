@@ -2,7 +2,7 @@
   "name": "neodrop",
   "productName": "NeoDrop",
   "version": "1.0.0",
-  "description": "Transfert de fichiers pair-à-pair entre ordinateurs distants, sans serveur",
+  "description": "Peer-to-peer file transfer between distant computers, no server",
   "author": "NeoDrop",
   "license": "MIT",
   "main": "src/main/index.js",

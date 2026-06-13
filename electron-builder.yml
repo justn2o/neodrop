@@ -1,5 +1,5 @@
-# Configuration electron-builder pour NeoDrop.
-# Build Windows : npm run build:win → installateur NSIS dans dist/
+# electron-builder configuration for NeoDrop.
+# Windows build: npm run build:win -> NSIS installer in dist/
 
 appId: com.neodrop.app
 productName: NeoDrop
@@ -13,9 +13,9 @@ files:
   - package.json
   - src/**/*
 
-# Icône commune (build/icon.png, 256×256). electron-builder en dérive les
-# formats par plateforme. Pour un rendu optimal, fournir aussi build/icon.ico
-# (Windows) et build/icon.icns (macOS) ; à défaut, le PNG est converti.
+# Shared icon (build/icon.png, 256x256); electron-builder derives per-platform
+# formats. For best results also provide build/icon.ico (Windows) and
+# build/icon.icns (macOS); otherwise the PNG is converted.
 
 win:
   icon: build/icon.png
@@ -25,7 +25,7 @@ win:
         - x64
 
 nsis:
-  # Installateur classique : l'utilisateur choisit le dossier d'installation.
+  # Classic installer: the user chooses the install folder.
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true

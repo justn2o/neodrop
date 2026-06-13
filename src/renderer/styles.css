@@ -1,4 +1,4 @@
-/* NeoDrop — design sobre : fond neutre, une couleur d'accent, typo système. */
+/* NeoDrop styles: neutral background, one accent color, system font. */
 
 :root {
   --bg: #f6f7f9;
@@ -26,7 +26,7 @@ body {
   user-select: none;
 }
 
-/* ---------- écrans ---------- */
+/* ---------- screens ---------- */
 
 .screen {
   display: none;
@@ -57,7 +57,7 @@ body {
 }
 .back-btn:hover { color: var(--text); border-color: var(--muted); }
 
-/* ---------- accueil ---------- */
+/* ---------- home ---------- */
 
 .brand { text-align: center; margin-top: 36px; }
 
@@ -101,7 +101,7 @@ body {
 .big-btn-label { font-size: 18px; font-weight: 650; }
 .big-btn-sub { font-size: 13px; opacity: .75; }
 
-/* ---------- boutons génériques ---------- */
+/* ---------- generic buttons ---------- */
 
 .btn {
   font-family: inherit;
@@ -123,7 +123,7 @@ body {
 .btn.danger-outline:hover { background: rgba(220, 38, 38, .06); }
 .btn:disabled { opacity: .5; cursor: default; }
 
-/* ---------- zone de dépôt ---------- */
+/* ---------- drop zone ---------- */
 
 .drop-zone {
   flex: 1;
@@ -144,7 +144,7 @@ body {
 .drop-icon { font-size: 38px; color: var(--accent); }
 .drop-actions { display: flex; gap: 10px; }
 
-/* ---------- code d'appairage ---------- */
+/* ---------- pairing code ---------- */
 
 .code-box {
   background: var(--surface);
@@ -194,7 +194,7 @@ body {
   color: var(--muted);
 }
 
-/* ---------- listes de fichiers ---------- */
+/* ---------- file lists ---------- */
 
 .file-summary {
   background: var(--surface);
@@ -220,7 +220,7 @@ body {
 }
 .file-row .size { color: var(--muted); flex-shrink: 0; }
 
-/* ---------- statuts / spinner ---------- */
+/* ---------- status / spinner ---------- */
 
 .status-line {
   display: flex;
@@ -247,7 +247,7 @@ body {
 .center { text-align: center; }
 .hint { font-size: 13px; color: var(--muted); text-align: center; }
 
-/* ---------- options d'envoi ---------- */
+/* ---------- send options ---------- */
 
 .options {
   background: var(--surface);
@@ -288,7 +288,7 @@ body {
   image-rendering: pixelated;
 }
 
-/* ---------- miniatures ---------- */
+/* ---------- thumbnails ---------- */
 
 .file-row .thumb {
   width: 34px; height: 34px;
@@ -299,7 +299,7 @@ body {
 }
 .file-row .name-wrap { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
 
-/* ---------- historique ---------- */
+/* ---------- history ---------- */
 
 .history-list {
   display: flex; flex-direction: column; gap: 8px;
@@ -348,7 +348,7 @@ body {
 }
 .confirm-actions .btn { flex: 1; padding: 13px; font-size: 15px; }
 
-/* ---------- progression ---------- */
+/* ---------- progress ---------- */
 
 .conn-badge {
   align-self: center;
@@ -402,7 +402,7 @@ body {
   color: var(--muted);
 }
 
-/* ---------- résultats ---------- */
+/* ---------- results ---------- */
 
 .result-icon {
   width: 64px; height: 64px;
