@@ -200,4 +200,4 @@ on a `v*` tag, publishes a Release with the three artifacts attached.
   fails with a timeout.
 - On **first launch on Windows**, allow the app through the Windows Firewall when
   prompted (needed for incoming connections and local discovery).
-`This app was developed with the help of Claude Code. As a result, it may contain bugs, inconsistencies, and missing features. I am not a professional developer, and I admit that I am not one.`
+- `This app was developed with the help of Claude Code. As a result, it may contain bugs, inconsistencies, and missing features. I am not a professional developer, and I admit that I am not one.`
