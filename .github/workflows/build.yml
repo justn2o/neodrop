@@ -1,0 +1,62 @@
+name: Build
+
+# Compile NeoDrop pour Windows, macOS et Linux sur des runners NATIFS
+# (seul moyen d'obtenir un .dmg macOS et un installeur .exe corrects).
+#
+# - Lancement manuel : onglet « Actions » → « Build » → « Run workflow ».
+# - Sur un tag « v* » (ex. v1.0.0) : publie en plus une Release avec les
+#   trois artefacts attachés.
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Installer les dépendances
+        run: npm ci
+
+      - name: Construire l'application
+        # electron-builder construit, par défaut, les cibles de l'OS courant
+        # (NSIS sous Windows, dmg sous macOS, AppImage sous Linux).
+        run: npx electron-builder --publish never
+        env:
+          # Pas de signature de code (builds non signés).
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Téléverser les artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: neodrop-${{ matrix.os }}
+          path: |
+            dist/*.AppImage
+            dist/*.dmg
+            dist/*.exe
+            dist/*-win.zip
+          if-no-files-found: ignore
+
+      - name: Publier la Release (sur tag v*)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.AppImage
+            dist/*.dmg
+            dist/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
