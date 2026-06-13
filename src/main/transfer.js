@@ -28,15 +28,51 @@ const fs = require('fs')
 const fsp = require('fs/promises')
 const path = require('path')
 const crypto = require('crypto')
+const zlib = require('zlib')
 const { EventEmitter } = require('events')
 const b4a = require('b4a')
 
 const CHUNK_SIZE = 64 * 1024
 const MAX_JSON_FRAME = 4 * 1024 * 1024 // OFFER d'un gros dossier (5000 fichiers)
-const MAX_CHUNK_FRAME = CHUNK_SIZE + 16
+// Un bloc compressé peut, dans le pire cas (données déjà entropiques), être
+// légèrement plus gros que le bloc d'origine : on garde une marge confortable.
+const MAX_CHUNK_FRAME = CHUNK_SIZE + 1024
 const HASH_PRECOMPUTE_LIMIT = 500 * 1024 * 1024 // < 500 Mo : SHA-256 avant envoi
 const HASH_PRECOMPUTE_MAX_FILES = 20 // au-delà, OFFER immédiat (hash au fil de l'envoi)
 const PROGRESS_INTERVAL = 200 // ms entre deux événements de progression
+
+// Compression à la volée (transport uniquement) : on ne compresse que les
+// formats où le gain est réel et au-dessus d'une taille plancher. Les formats
+// déjà compressés (zip, jpg, mp4…) sont envoyés tels quels. Le SHA-256 porte
+// toujours sur les données d'ORIGINE : la compression n'affaiblit pas la
+// vérification d'intégrité.
+const COMPRESS_MIN_SIZE = 4 * 1024
+const COMPRESSIBLE_EXT = new Set([
+  '.txt', '.log', '.csv', '.tsv', '.json', '.xml', '.html', '.htm', '.css',
+  '.js', '.mjs', '.ts', '.md', '.rtf', '.svg', '.yml', '.yaml', '.ini',
+  '.bmp', '.tiff', '.tif', '.wav', '.tar', '.sql', '.c', '.h', '.cpp',
+  '.py', '.java', '.go', '.rs', '.rb', '.php', '.sh', '.bat', '.tex'
+])
+
+function shouldCompress (name, size) {
+  if (size < COMPRESS_MIN_SIZE) return false
+  return COMPRESSIBLE_EXT.has(path.extname(String(name)).toLowerCase())
+}
+
+// Brotli rapide (qualité basse) : l'objectif est de réduire le volume réseau
+// sans devenir le goulot d'étranglement sur une connexion rapide.
+function makeCompressor () {
+  return zlib.createBrotliCompress({
+    params: {
+      [zlib.constants.BROTLI_PARAM_QUALITY]: 4,
+      [zlib.constants.BROTLI_PARAM_LGWIN]: 22
+    }
+  })
+}
+
+function makeDecompressor () {
+  return zlib.createBrotliDecompress()
+}
 
 // Timeouts protocolaires : un pair authentifié mais muet ne doit jamais
 // bloquer l'UI indéfiniment (le keep-alive ne détecte que les pairs morts).
@@ -299,6 +335,24 @@ async function pathExists (p) {
   try { await fsp.access(p); return true } catch { return false }
 }
 
+/**
+ * Déplace un fichier, avec repli copie+suppression si la source et la
+ * destination sont sur des volumes différents (rename → EXDEV). Sert quand le
+ * cache de reprise n'est pas sur le même disque que le dossier de destination.
+ */
+async function moveFile (src, dst) {
+  try {
+    await fsp.rename(src, dst)
+  } catch (err) {
+    if (err && err.code === 'EXDEV') {
+      await fsp.copyFile(src, dst)
+      await fsp.unlink(src).catch(() => {})
+    } else {
+      throw err
+    }
+  }
+}
+
 /** SHA-256 d'un fichier en streaming (jamais le fichier entier en RAM). */
 function hashFile (filePath) {
   return new Promise((resolve, reject) => {
@@ -307,6 +361,20 @@ function hashFile (filePath) {
     rs.on('data', (d) => hash.update(d))
     rs.on('error', reject)
     rs.on('end', () => resolve(hash.digest('hex')))
+  })
+}
+
+/**
+ * Alimente un hash avec les « upTo » premiers octets d'un fichier (reprise).
+ * Sert à recalculer le SHA-256 complet sans renvoyer/réécrire le préfixe.
+ */
+function seedHash (hash, filePath, upTo) {
+  return new Promise((resolve, reject) => {
+    if (upTo <= 0) return resolve()
+    const rs = fs.createReadStream(filePath, { start: 0, end: upTo - 1, highWaterMark: CHUNK_SIZE })
+    rs.on('data', (d) => hash.update(d))
+    rs.on('error', reject)
+    rs.on('end', resolve)
   })
 }
 
@@ -364,28 +432,52 @@ class ProgressTracker {
  *              'file-done', 'done', 'error', 'cancelled'.
  */
 class TransferSender extends EventEmitter {
-  constructor (frames, entries, { senderName }) {
+  constructor (frames, entries, { senderName, compression = true, rateLimit = 0 } = {}) {
     super()
     this.frames = frames
     // Normalise : on accepte soit des chemins (fichiers seuls), soit des
-    // objets { path, relPath } (arborescence d'un dossier). relPath est le
-    // chemin affiché/recréé chez le destinataire.
+    // objets { path, relPath, thumb } (arborescence d'un dossier, miniature).
+    // relPath est le chemin affiché/recréé chez le destinataire.
     this.entries = entries.map((e) =>
       typeof e === 'string' ? { path: e, relPath: path.basename(e) } : e)
     this.senderName = senderName
+    this.compression = compression // négociable, désactivable pour les tests
+    this.rateLimit = rateLimit | 0 // octets/s ; 0 = illimité (#11)
     this.cancelled = false
     this.finished = false
     this._currentStream = null
+    this._ackedOk = 0
+    this._fileMeta = new Map() // id → { name } pour émettre 'file-done' à l'ACK
+    this._sentAt = 0 // horodatage de départ pour la limite de débit
 
-    // Écouteurs persistants : un CANCEL du pair ou une coupure réseau
-    // doivent être traités même en plein streaming de chunks.
+    // Écouteurs persistants : un CANCEL du pair, un FILE_FAIL (intégrité
+    // rejetée) ou une coupure réseau doivent être traités même en plein
+    // streaming. Les ACK (FILE_OK) sont collectés ici car l'envoi est
+    // PIPELINÉ : on n'attend plus le FILE_OK de chaque fichier avant
+    // d'enchaîner le suivant (gain majeur sur de nombreux petits fichiers).
     frames.on('json', (msg) => {
-      if (msg && msg.t === 'CANCEL') this._onPeerCancel()
+      if (!msg) return
+      if (msg.t === 'CANCEL') this._onPeerCancel()
+      else if (msg.t === 'FILE_FAIL') this._onFileFail(msg)
+      else if (msg.t === 'FILE_OK') this._onFileOk(msg)
     })
     frames.on('error', (err) => this._fail(err))
     frames.on('close', () => {
       this._fail(new Error('La connexion avec le destinataire a été perdue'))
     })
+  }
+
+  _onFileOk (msg) {
+    if (this.finished || this.cancelled) return
+    this._ackedOk++
+    const m = this._fileMeta.get(Number(msg.id))
+    if (m) this.emit('file-done', { id: Number(msg.id), name: m.name })
+  }
+
+  _onFileFail (msg) {
+    if (this.finished || this.cancelled) return
+    const name = (this._fileMeta.get(Number(msg.id)) || {}).name || 'un fichier'
+    this._fail(new Error(`Le fichier « ${name} » a été rejeté : ${msg.reason || 'intégrité non vérifiée'}`))
   }
 
   async start () {
@@ -404,7 +496,7 @@ class TransferSender extends EventEmitter {
     const files = []
     const precompute = this.entries.length <= HASH_PRECOMPUTE_MAX_FILES
     for (let i = 0; i < this.entries.length; i++) {
-      const { path: p, relPath } = this.entries[i]
+      const { path: p, relPath, thumb } = this.entries[i]
       const st = await fsp.stat(p)
       if (!st.isFile()) throw new Error(`« ${path.basename(p)} » n'est pas un fichier`)
       const entry = {
@@ -414,6 +506,11 @@ class TransferSender extends EventEmitter {
         size: st.size,
         sha256: null
       }
+      // Miniature (#8) : passée telle quelle si l'appelant l'a fournie et
+      // qu'elle reste raisonnable (data URL image courte).
+      if (typeof thumb === 'string' && thumb.startsWith('data:image/') && thumb.length < 200000) {
+        entry.thumb = thumb
+      }
       if (precompute && st.size < HASH_PRECOMPUTE_LIMIT) entry.sha256 = await hashFile(p)
       files.push(entry)
       if (this.cancelled) return
@@ -421,7 +518,9 @@ class TransferSender extends EventEmitter {
     const totalSize = files.reduce((a, f) => a + f.size, 0)
     const isFolder = this.entries.some((e) => e.relPath.includes('/') || e.relPath.includes('\\'))
 
-    this.frames.sendJson({ t: 'OFFER', files, sender: this.senderName, folder: isFolder })
+    this.frames.sendJson({
+      t: 'OFFER', files, sender: this.senderName, folder: isFolder, compression: this.compression
+    })
     this.emit('offer-sent', { files, totalSize })
 
     // Le destinataire peut réfléchir, mais pas indéfiniment.
@@ -433,23 +532,32 @@ class TransferSender extends EventEmitter {
     }
     this.emit('accepted')
 
+    // Reprise (#1) : le destinataire peut indiquer des octets déjà reçus par
+    // relPath (depuis une tentative précédente). On reprend l'envoi à cet
+    // offset ; le SHA-256 porte toujours sur le fichier complet.
+    const resume = (reply && reply.resume && typeof reply.resume === 'object') ? reply.resume : {}
     const progress = new ProgressTracker(totalSize, (p) => this.emit('progress', p))
+    this._sentAt = Date.now()
 
+    // Envoi PIPELINÉ : on enchaîne les fichiers sans attendre chaque FILE_OK.
+    // Le destinataire traite les trames dans l'ordre (file FIFO) ; les ACK
+    // sont collectés en arrière-plan, et un FILE_FAIL interrompt aussitôt.
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
       const meta = { index: i, count: files.length, name: file.name, size: file.size }
-      this.frames.sendJson({ t: 'FILE_START', id: file.id })
+      this._fileMeta.set(file.id, { name: file.name })
 
-      const sha256 = await this._streamFile(this.entries[i].path, meta, progress)
+      let startOffset = Number(resume[file.relPath] || resume[file.name] || 0)
+      if (!Number.isFinite(startOffset) || startOffset < 0 || startOffset > file.size) startOffset = 0
+      const compress = this.compression && shouldCompress(file.name, file.size - startOffset)
+
+      this.frames.sendJson({ t: 'FILE_START', id: file.id, compressed: compress, offset: startOffset })
+      if (startOffset > 0) progress.update(meta, startOffset, startOffset)
+
+      const sha256 = await this._streamFile(this.entries[i].path, meta, progress, { compress, startOffset })
       if (this.cancelled || this.finished || this.frames.destroyed) return
 
       this.frames.sendJson({ t: 'FILE_END', id: file.id, sha256 })
-      const ack = await this._waitJson(['FILE_OK', 'FILE_FAIL'], ACK_TIMEOUT)
-      if (ack.t === 'FILE_FAIL') {
-        throw new Error(`Le fichier « ${file.name} » a été rejeté : ${ack.reason || 'intégrité non vérifiée'}`)
-      }
-      progress.update(meta, file.size, 0, true)
-      this.emit('file-done', { id: file.id, name: file.name })
     }
 
     this.frames.sendJson({ t: 'DONE' })
@@ -462,37 +570,95 @@ class TransferSender extends EventEmitter {
     this.frames.endGracefully()
   }
 
-  /** Envoie un fichier par blocs de 64 Ko avec gestion du backpressure. */
-  _streamFile (filePath, meta, progress) {
-    return new Promise((resolve, reject) => {
-      const hash = crypto.createHash('sha256')
-      let fileBytes = 0
-      const rs = fs.createReadStream(filePath, { highWaterMark: CHUNK_SIZE })
-      this._currentStream = rs
+  /**
+   * Envoie un fichier par blocs de 64 Ko avec gestion du backpressure.
+   * opts.compress : compression brotli en transport (hash sur l'original).
+   * opts.startOffset : reprise — on n'envoie que les octets à partir de là,
+   *                    mais le SHA-256 couvre tout le fichier (préfixe inclus).
+   */
+  async _streamFile (filePath, meta, progress, { compress = false, startOffset = 0 } = {}) {
+    const hash = crypto.createHash('sha256')
+    // Reprise : alimente le hash avec le préfixe déjà transmis, sans le renvoyer.
+    if (startOffset > 0) await seedHash(hash, filePath, startOffset)
+    return compress
+      ? this._streamCompressed(filePath, meta, progress, hash, startOffset)
+      : this._streamRaw(filePath, meta, progress, hash, startOffset)
+  }
 
+  _streamRaw (filePath, meta, progress, hash, startOffset) {
+    return new Promise((resolve, reject) => {
+      let fileBytes = startOffset
+      const rs = fs.createReadStream(filePath, { highWaterMark: CHUNK_SIZE, start: startOffset })
+      this._currentStream = rs
       rs.on('data', (chunk) => {
-        if (this.cancelled || this.frames.destroyed) {
-          rs.destroy()
-          return resolve(null)
-        }
+        if (this.cancelled || this.frames.destroyed) { rs.destroy(); return resolve(null) }
         hash.update(chunk)
         fileBytes += chunk.length
         const ok = this.frames.sendChunk(chunk)
         progress.update(meta, fileBytes, chunk.length)
-        if (!ok) {
-          // Tampon d'envoi plein : on met le fichier en pause jusqu'au drain.
+        if (!ok || this._overRate(fileBytes - startOffset)) {
           rs.pause()
-          this.frames.waitDrain().then(() => {
+          this._throttle(fileBytes - startOffset).then(() => this.frames.waitDrain()).then(() => {
             if (!this.cancelled && !rs.destroyed) rs.resume()
           })
         }
       })
       rs.on('error', reject)
-      rs.on('end', () => {
-        this._currentStream = null
-        resolve(hash.digest('hex'))
-      })
+      rs.on('end', () => { this._currentStream = null; resolve(hash.digest('hex')) })
     })
+  }
+
+  _streamCompressed (filePath, meta, progress, hash, startOffset) {
+    return new Promise((resolve, reject) => {
+      let fileBytes = startOffset
+      const rs = fs.createReadStream(filePath, { highWaterMark: CHUNK_SIZE, start: startOffset })
+      const comp = makeCompressor()
+      this._currentStream = rs
+      const fail = (err) => { try { rs.destroy() } catch {}; try { comp.destroy() } catch {}; reject(err) }
+
+      rs.on('data', (chunk) => {
+        if (this.cancelled || this.frames.destroyed) { rs.destroy(); comp.destroy(); return resolve(null) }
+        hash.update(chunk) // hash sur les données d'ORIGINE
+        fileBytes += chunk.length
+        progress.update(meta, fileBytes, chunk.length)
+        if (!comp.write(chunk)) rs.pause()
+      })
+      comp.on('drain', () => { if (!rs.destroyed && !this.cancelled) rs.resume() })
+      rs.on('error', fail)
+      rs.on('end', () => comp.end())
+
+      comp.on('data', (cbuf) => {
+        if (this.cancelled || this.frames.destroyed) return
+        // Le bloc compressé peut dépasser CHUNK_SIZE : on le redécoupe pour
+        // respecter la borne de trame du destinataire.
+        for (let off = 0; off < cbuf.length; off += CHUNK_SIZE) {
+          const ok = this.frames.sendChunk(cbuf.subarray(off, Math.min(off + CHUNK_SIZE, cbuf.length)))
+          if (!ok) {
+            comp.pause()
+            this.frames.waitDrain().then(() => { if (!this.cancelled) comp.resume() })
+            break
+          }
+        }
+      })
+      comp.on('error', fail)
+      comp.on('end', () => { this._currentStream = null; resolve(hash.digest('hex')) })
+    })
+  }
+
+  /** Limite de débit (#11) : retourne true si on dépasse le quota courant. */
+  _overRate (sent) {
+    if (!this.rateLimit) return false
+    const elapsed = (Date.now() - this._sentAt) / 1000
+    return sent > this.rateLimit * Math.max(elapsed, 0.001)
+  }
+
+  /** Attend juste assez pour rester sous la limite de débit configurée. */
+  _throttle (sent) {
+    if (!this.rateLimit) return Promise.resolve()
+    const target = sent / this.rateLimit // secondes idéales pour « sent » octets
+    const elapsed = (Date.now() - this._sentAt) / 1000
+    const wait = Math.min(2000, Math.max(0, (target - elapsed) * 1000))
+    return wait > 0 ? new Promise((r) => setTimeout(r, wait)) : Promise.resolve()
   }
 
   _waitJson (types, timeout = 0) {
@@ -575,17 +741,24 @@ class TransferSender extends EventEmitter {
  * Événements : 'offer', 'progress', 'file-done', 'done', 'error', 'cancelled'.
  */
 class TransferReceiver extends EventEmitter {
-  constructor (frames) {
+  constructor (frames, { resumeDir = null } = {}) {
     super()
     this.frames = frames
+    // Dossier de cache des fichiers partiels pour la reprise (#1). Quand il
+    // est défini, un fichier interrompu par une coupure réseau y est CONSERVÉ
+    // (clé = empreinte du chemin relatif + taille) afin d'être repris lors
+    // d'une prochaine tentative avec le même code. null = pas de reprise
+    // (comportement d'origine : le .part vit à côté du fichier final).
+    this.resumeDir = resumeDir
     this.cancelled = false
     this.finished = false
     this.offer = null
     this.destDir = null
-    this._current = null // { file, ws, hash, bytes, partPath, finalPath }
+    this._current = null // { file, ws, hash, bytes, partPath, finalPath, decomp }
     this._progress = null
     this._results = []
     this._idleTimer = null
+    this._resumeOffsets = new Map() // id → octets déjà reçus (reprise)
     this._rootDirs = new Map() // relPath racine → nom de dossier réservé
 
     // Les trames sont émises de façon synchrone par la socket alors que
@@ -621,14 +794,41 @@ class TransferReceiver extends EventEmitter {
   }
 
   /** Accepte l'offre : seul point où l'écriture disque devient possible. */
-  accept (destDir) {
+  async accept (destDir) {
     if (!this.offer || this.destDir) return
     this.destDir = destDir
     const totalSize = this.offer.files.reduce((a, f) => a + f.size, 0)
     this._progress = new ProgressTracker(totalSize, (p) => this.emit('progress', p))
+
+    // Reprise (#1) : repère les fichiers partiels déjà en cache pour ce
+    // transfert et annonce les octets déjà reçus à l'expéditeur.
+    const resume = {}
+    if (this.resumeDir) {
+      for (const f of this.offer.files) {
+        const have = await this._partialBytes(f).catch(() => 0)
+        if (have > 0 && have <= f.size) {
+          this._resumeOffsets.set(f.id, have)
+          resume[f.relPath] = have
+        }
+      }
+    }
+
     // Le transfert démarre : on surveille les silences prolongés.
     this._armIdle(IDLE_TIMEOUT, "L'expéditeur ne répond plus.")
-    this.frames.sendJson({ t: 'ACCEPT' })
+    this.frames.sendJson({ t: 'ACCEPT', resume })
+  }
+
+  /** Chemin de cache du fichier partiel d'un fichier offert (reprise). */
+  _partialPath (file) {
+    const key = crypto.createHash('sha256')
+      .update(`${file.relPath}|${file.size}`).digest('hex').slice(0, 32)
+    return path.join(this.resumeDir, key + '.part')
+  }
+
+  /** Octets déjà présents dans le cache de reprise pour ce fichier (0 sinon). */
+  async _partialBytes (file) {
+    const st = await fsp.stat(this._partialPath(file)).catch(() => null)
+    return st && st.isFile() ? st.size : 0
   }
 
   reject () {
@@ -641,6 +841,9 @@ class TransferReceiver extends EventEmitter {
   }
 
   async _onJson (msg) {
+    // Après un échec/annulation, on ignore toute trame résiduelle : avec
+    // l'envoi pipeliné, un DONE peut suivre un FILE_FAIL sur le fil.
+    if (this.finished || this.cancelled) return
     try {
       switch (msg.t) {
         case 'OFFER': {
@@ -652,12 +855,15 @@ class TransferReceiver extends EventEmitter {
           const seenIds = new Set()
           const files = msg.files.map((f) => {
             const rel = sanitizeRelPath(f.relPath || f.name) || sanitizeFilename(f.name)
+            const thumb = (typeof f.thumb === 'string' &&
+              f.thumb.startsWith('data:image/') && f.thumb.length < 200000) ? f.thumb : null
             return {
               id: Number(f.id),
               name: sanitizeFilename(f.name),
               relPath: rel,
               size: Number(f.size),
-              sha256: typeof f.sha256 === 'string' ? f.sha256 : null
+              sha256: typeof f.sha256 === 'string' ? f.sha256 : null,
+              thumb
             }
           })
           for (const f of files) {
@@ -672,13 +878,17 @@ class TransferReceiver extends EventEmitter {
           this.offer = {
             files,
             sender: String(msg.sender || 'Pair inconnu').slice(0, 64),
-            folder: !!msg.folder
+            folder: !!msg.folder,
+            compression: !!msg.compression
           }
           this.emit('offer', this.offer)
           break
         }
         case 'FILE_START':
-          await this._startFile(Number(msg.id))
+          await this._startFile(Number(msg.id), {
+            compressed: !!msg.compressed,
+            offset: Number(msg.offset) || 0
+          })
           break
         case 'FILE_END':
           await this._endFile(Number(msg.id), String(msg.sha256 || ''))
@@ -708,7 +918,7 @@ class TransferReceiver extends EventEmitter {
     }
   }
 
-  async _startFile (id) {
+  async _startFile (id, { compressed = false, offset = 0 } = {}) {
     if (!this.destDir) throw new Error('Transfert non accepté')
     if (this._current) throw new Error('Protocole invalide : fichier déjà en cours')
     const index = this.offer.files.findIndex((f) => f.id === id)
@@ -719,20 +929,69 @@ class TransferReceiver extends EventEmitter {
     // sous un nom de racine unique mémorisé (pour garder l'arborescence).
     const finalPath = await this._resolveDest(file.relPath)
     await fsp.mkdir(path.dirname(finalPath), { recursive: true })
-    const partPath = finalPath + '.part'
 
-    const ws = fs.createWriteStream(partPath, { highWaterMark: CHUNK_SIZE * 4 })
+    // Emplacement du fichier partiel : cache de reprise persistant si activé,
+    // sinon à côté du fichier final (comportement d'origine).
+    const partPath = this.resumeDir ? this._partialPath(file) : finalPath + '.part'
+    if (this.resumeDir) await fsp.mkdir(this.resumeDir, { recursive: true })
+
+    const hash = crypto.createHash('sha256')
+    let bytes = 0
+    const wsOpts = { highWaterMark: CHUNK_SIZE * 4 }
+    // Reprise : on ne reprend que si l'offset annoncé correspond exactement
+    // à ce que l'on a réellement en cache, sinon on repart de zéro (sûr).
+    if (offset > 0 && this._resumeOffsets.get(id) === offset && (await this._partialBytes(file)) >= offset) {
+      await seedHash(hash, partPath, offset) // ré-alimente le hash du préfixe
+      bytes = offset
+      wsOpts.flags = 'r+' // conserve le préfixe, écriture à la suite
+      wsOpts.start = offset
+    }
+
+    const ws = fs.createWriteStream(partPath, wsOpts)
     ws.on('error', (err) => this._fail(err))
     activeParts.set(partPath, ws)
-    this._current = {
+
+    const cur = {
       file,
       meta: { index, count: this.offer.files.length, name: file.name, size: file.size },
       ws,
-      hash: crypto.createHash('sha256'),
-      bytes: 0,
+      hash,
+      bytes,
       partPath,
-      finalPath
+      finalPath,
+      decomp: null
     }
+    if (compressed) cur.decomp = this._makeDecompPipeline(cur)
+    this._current = cur
+  }
+
+  /**
+   * Crée le décompresseur d'un fichier reçu compressé : ses sorties (octets
+   * d'origine) alimentent le hash, le compteur et l'écriture disque, avec
+   * backpressure (on met le décompresseur en pause quand le disque sature).
+   */
+  _makeDecompPipeline (cur) {
+    const decomp = makeDecompressor()
+    decomp.on('data', (out) => {
+      if (this.cancelled || this.finished) return
+      if (cur.bytes + out.length > cur.file.size) {
+        this._fail(new Error("L'expéditeur a envoyé plus de données qu'annoncé"))
+        return
+      }
+      cur.hash.update(out)
+      cur.bytes += out.length
+      this._progress.update(cur.meta, cur.bytes, out.length)
+      if (!cur.ws.write(out)) {
+        decomp.pause()
+        const resume = () => {
+          cur.ws.off('drain', resume)
+          if (!this.cancelled && !this.finished) decomp.resume()
+        }
+        cur.ws.on('drain', resume)
+      }
+    })
+    decomp.on('error', (err) => this._fail(err))
+    return decomp
   }
 
   /**
@@ -762,6 +1021,26 @@ class TransferReceiver extends EventEmitter {
       return
     }
     this._armIdle(IDLE_TIMEOUT, "L'expéditeur ne répond plus.") // activité → on repousse le délai
+
+    // Fichier compressé : on alimente le décompresseur, qui fait la
+    // comptabilité/écriture (voir _makeDecompPipeline). Backpressure entre la
+    // socket et le décompresseur.
+    if (cur.decomp) {
+      const ok = cur.decomp.write(chunk)
+      if (!ok) {
+        this.frames.pause()
+        return new Promise((resolve) => {
+          const done = () => {
+            cur.decomp.off('drain', done)
+            if (!this.cancelled && !this.finished) this.frames.resume()
+            resolve()
+          }
+          cur.decomp.on('drain', done)
+        })
+      }
+      return
+    }
+
     if (cur.bytes + chunk.length > cur.file.size) {
       this._fail(new Error("L'expéditeur a envoyé plus de données qu'annoncé"))
       return
@@ -796,6 +1075,15 @@ class TransferReceiver extends EventEmitter {
     // Si ws.end() ou rename() échoue (disque plein, permission), l'exception
     // remonte et _fail() → _cleanupCurrent() doit encore retrouver le .part.
 
+    // Vide le décompresseur (fichier compressé) avant de finaliser le hash.
+    if (cur.decomp) {
+      await new Promise((resolve, reject) => {
+        cur.decomp.on('error', reject)
+        cur.decomp.on('end', resolve)
+        cur.decomp.end()
+      })
+    }
+
     await new Promise((resolve, reject) => cur.ws.end((err) => err ? reject(err) : resolve()))
 
     const localHash = cur.hash.digest('hex')
@@ -811,8 +1099,9 @@ class TransferReceiver extends EventEmitter {
       throw new Error(`Le fichier « ${cur.file.name} » est corrompu (vérification d'intégrité échouée). Il a été supprimé.`)
     }
 
-    // Intégrité vérifiée : le .part devient le fichier définitif.
-    await fsp.rename(cur.partPath, cur.finalPath)
+    // Intégrité vérifiée : le .part devient le fichier définitif (le cache de
+    // reprise peut être sur un autre volume → moveFile gère le cas EXDEV).
+    await moveFile(cur.partPath, cur.finalPath)
     this._current = null
     activeParts.delete(cur.partPath)
     this._results.push({ id, name: cur.file.name, relPath: cur.file.relPath, path: cur.finalPath, size: cur.file.size })
@@ -821,10 +1110,11 @@ class TransferReceiver extends EventEmitter {
     this.emit('file-done', { id, name: cur.file.name, path: cur.finalPath })
   }
 
-  async _cleanupCurrent () {
+  async _cleanupCurrent (keepPartial = false) {
     const cur = this._current
     this._current = null
     if (!cur) return
+    if (cur.decomp) { try { cur.decomp.destroy() } catch {} }
     // Attendre la fermeture effective du flux avant l'unlink : sous Windows
     // un unlink sur un fichier encore ouvert échoue.
     await new Promise((resolve) => {
@@ -832,8 +1122,11 @@ class TransferReceiver extends EventEmitter {
       cur.ws.once('close', resolve)
       try { cur.ws.destroy() } catch { resolve() }
     })
-    await fsp.unlink(cur.partPath).catch(() => {})
     activeParts.delete(cur.partPath)
+    // Reprise (#1) : sur une coupure réseau (pas une annulation explicite), on
+    // CONSERVE le fichier partiel en cache pour pouvoir reprendre plus tard.
+    if (keepPartial && this.resumeDir) return
+    await fsp.unlink(cur.partPath).catch(() => {})
   }
 
   cancel () {
@@ -841,7 +1134,9 @@ class TransferReceiver extends EventEmitter {
     this.cancelled = true
     this._clearIdle()
     try { this.frames.sendJson({ t: 'CANCEL' }) } catch {}
-    this._cleanupCurrent().finally(() => {
+    // Annulation explicite : on NE conserve PAS de partiel (l'utilisateur a
+    // renoncé à ce transfert).
+    this._cleanupCurrent(false).finally(() => {
       this.emit('cancelled', { by: 'local' })
       this.frames.endGracefully()
     })
@@ -851,7 +1146,8 @@ class TransferReceiver extends EventEmitter {
     if (this.finished || this.cancelled) return
     this.finished = true
     this._clearIdle()
-    this._cleanupCurrent().finally(() => {
+    // Coupure/erreur réseau : on conserve le partiel pour une reprise.
+    this._cleanupCurrent(true).finally(() => {
       this.emit('error', err)
       this.frames.destroy()
     })
@@ -859,14 +1155,15 @@ class TransferReceiver extends EventEmitter {
 
   /**
    * Arrêt silencieux pour le démantèlement de session (fermeture de l'app).
-   * Marque comme terminé et nettoie le .part en cours sans émettre d'erreur.
+   * Marque comme terminé et conserve le .part en cours (reprise possible au
+   * prochain lancement) si un cache de reprise est configuré.
    */
   dispose () {
     this.finished = true
     this._clearIdle()
     this.removeAllListeners()
     this.on('error', () => {})
-    return this._cleanupCurrent()
+    return this._cleanupCurrent(true)
   }
 }
 
@@ -887,5 +1184,6 @@ module.exports = {
   uniquePath,
   hashFile,
   cleanupAllPartFiles,
+  shouldCompress,
   CHUNK_SIZE
 }

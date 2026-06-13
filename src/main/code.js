@@ -3,16 +3,22 @@
 /**
  * Génération et validation des codes d'appairage, dérivation cryptographique.
  *
- * Format du code : MOT-CHIFFRES, ex. « TIGRE-7342 ».
- *  - mot tiré d'une liste embarquée de 520 mots français simples (~9 bits)
+ * Format du code : (MOT-)+CHIFFRES, ex. « TIGRE-7342 » ou « TIGRE-LION-7342 ».
+ *  - 1 à 3 mots tirés d'une liste embarquée de 520 mots français (~9 bits/mot)
  *  - 4 chiffres (0000-9999, ~13,3 bits)
- *  → ~22,3 bits d'entropie, généré exclusivement via le CSPRNG de Node.
+ *  → ~22,3 bits (1 mot), ~31,5 bits (2 mots), ~40,7 bits (3 mots), généré
+ *    exclusivement via le CSPRNG de Node. Le niveau « renforcé » sert aux
+ *    transferts sensibles (voir generateCode).
  *
  * Le topic DHT et la clé d'authentification sont dérivés du code par UNE
  * passe lente de scrypt (sel fixe applicatif), puis séparés par HKDF.
  * Un attaquant qui crawle la DHT ne peut donc pas retrouver le code par
  * un simple dictionnaire SHA-256, et le code lui-même ne transite jamais
  * en clair sur le réseau (preuve par HMAC, voir swarm.js).
+ *
+ * Passphrase optionnelle : l'expéditeur peut exiger en plus une phrase
+ * secrète libre, mélangée à la dérivation. Même si quelqu'un devine ou
+ * intercepte le code, sans la passphrase il ne peut pas s'authentifier.
  */
 
 const crypto = require('crypto')
@@ -96,18 +102,26 @@ const WORDS = [
   'MARBRE', 'GRANIT', 'ARDOISE', 'SABLE', 'ARGILE', 'CRAIE', 'SILEX', 'GALET'
 ]
 
-const CODE_REGEX = /^([A-Z]{2,12})-(\d{4})$/
+// 1 à 3 mots, puis 4 chiffres. Le groupe 1 capture toute la partie « mots ».
+const CODE_REGEX = /^([A-Z]{2,12}(?:-[A-Z]{2,12}){0,2})-(\d{4})$/
 
 /**
  * Génère un nouveau code d'appairage, ex. « TIGRE-7342 ».
  * Tirage uniforme via crypto.randomBytes (jamais Math.random).
+ *
+ * opts.words : nombre de mots (1 par défaut ; 2-3 pour un code renforcé).
+ * On peut aussi passer opts.strength ∈ {'normal','high','max'}.
  */
-function generateCode () {
+function generateCode (opts = {}) {
+  const byStrength = { normal: 1, high: 2, max: 3 }
+  let words = opts.words || byStrength[opts.strength] || 1
+  words = Math.min(3, Math.max(1, words | 0))
   // crypto.randomInt s'appuie sur le CSPRNG (randomBytes) et évite tout
   // biais modulo, quelle que soit la taille de la liste.
-  const wordIndex = crypto.randomInt(0, WORDS.length)
-  const digits = crypto.randomInt(0, 10000).toString().padStart(4, '0')
-  return `${WORDS[wordIndex]}-${digits}`
+  const parts = []
+  for (let i = 0; i < words; i++) parts.push(WORDS[crypto.randomInt(0, WORDS.length)])
+  parts.push(crypto.randomInt(0, 10000).toString().padStart(4, '0'))
+  return parts.join('-')
 }
 
 /**
@@ -117,19 +131,19 @@ function generateCode () {
 function normalizeCode (input) {
   if (typeof input !== 'string') return null
   let s = input.trim().toUpperCase().replace(/\s+/g, '-').replace(/-+/g, '-')
-  // Tolère « TIGRE7342 » sans séparateur.
+  // Tolère « TIGRE7342 » sans séparateur (un seul mot collé aux chiffres).
   const noSep = s.match(/^([A-Z]{2,12})(\d{4})$/)
   if (noSep) s = `${noSep[1]}-${noSep[2]}`
   return CODE_REGEX.test(s) ? s : null
 }
 
 /**
- * Une passe lente de scrypt sur le code → secret maître de 32 octets.
+ * Une passe lente de scrypt sur le secret → secret maître de 32 octets.
  * Asynchrone pour ne jamais bloquer le process main.
  */
-function deriveMaster (code) {
+function deriveMaster (secret) {
   return new Promise((resolve, reject) => {
-    crypto.scrypt(b4a.from(code, 'utf8'), APP_SALT, 32, SCRYPT_PARAMS, (err, key) => {
+    crypto.scrypt(b4a.from(secret, 'utf8'), APP_SALT, 32, SCRYPT_PARAMS, (err, key) => {
       if (err) reject(err)
       else resolve(key)
     })
@@ -137,14 +151,19 @@ function deriveMaster (code) {
 }
 
 /**
- * Dérive du code les deux secrets nécessaires :
+ * Dérive du code (et d'une passphrase optionnelle) les deux secrets :
  *  - topic   : clé de rendez-vous DHT (32 octets) — c'est la seule valeur
  *              visible publiquement (annoncée sur la DHT Hyperswarm) ;
  *  - authKey : clé HMAC du challenge-réponse — jamais transmise.
  * HKDF garantit que connaître le topic ne donne pas la clé d'auth.
+ *
+ * Si une passphrase est fournie, elle est mêlée à l'entrée de scrypt : le
+ * topic ET la clé d'auth en dépendent, donc le pair doit connaître les deux.
+ * Sans passphrase, le résultat est identique à la version d'origine.
  */
-async function deriveSecrets (code) {
-  const master = await deriveMaster(code)
+async function deriveSecrets (code, passphrase = '') {
+  const secret = passphrase ? `${code}\n${passphrase}` : code
+  const master = await deriveMaster(secret)
   const topic = b4a.from(crypto.hkdfSync('sha256', master, APP_SALT, b4a.from('neodrop/topic'), 32))
   const authKey = b4a.from(crypto.hkdfSync('sha256', master, APP_SALT, b4a.from('neodrop/auth'), 32))
   return { topic, authKey }
