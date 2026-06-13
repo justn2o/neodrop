@@ -6,12 +6,19 @@
   "author": "NeoDrop",
   "license": "MIT",
   "main": "src/main/index.js",
+  "bin": {
+    "neodrop": "bin/cli.js"
+  },
   "scripts": {
     "start": "electron .",
+    "cli": "node bin/cli.js",
     "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux",
     "test": "node test/run-tests.js"
   },
   "dependencies": {
+    "@hyperswarm/secret-stream": "^6.9.1",
     "b4a": "^1.6.7",
     "hyperswarm": "^4.8.4",
     "multicast-dns": "^7.2.5",

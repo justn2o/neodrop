@@ -13,11 +13,12 @@ files:
   - package.json
   - src/**/*
 
-# Icône : placer build/icon.ico (Windows) et build/icon.png (Linux) /
-# build/icon.icns (macOS). Sans icône, electron-builder utilise celle
-# d'Electron par défaut (placeholder acceptable pour les tests).
+# Icône commune (build/icon.png, 256×256). electron-builder en dérive les
+# formats par plateforme. Pour un rendu optimal, fournir aussi build/icon.ico
+# (Windows) et build/icon.icns (macOS) ; à défaut, le PNG est converti.
 
 win:
+  icon: build/icon.png
   target:
     - target: nsis
       arch:
@@ -30,15 +31,16 @@ nsis:
   createDesktopShortcut: true
   shortcutName: NeoDrop
 
-# --- Cibles macOS / Linux : configuration prête, à décommenter au besoin ---
-# mac:
-#   target:
-#     - target: dmg
-#       arch: [x64, arm64]
-#   category: public.app-category.utilities
-#
-# linux:
-#   target:
-#     - target: AppImage
-#       arch: [x64]
-#   category: Utility
+mac:
+  icon: build/icon.png
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  category: public.app-category.utilities
+
+linux:
+  icon: build/icon.png
+  target:
+    - target: AppImage
+      arch: [x64]
+  category: Utility
