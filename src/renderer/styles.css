@@ -142,6 +142,7 @@ body {
 }
 .drop-zone.dragover { border-color: var(--accent); background: #eff4ff; }
 .drop-icon { font-size: 38px; color: var(--accent); }
+.drop-actions { display: flex; gap: 10px; }
 
 /* ---------- code d'appairage ---------- */
 

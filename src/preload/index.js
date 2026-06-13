@@ -10,11 +10,14 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 contextBridge.exposeInMainWorld('api', {
   /* --- envoi --- */
-  // Démarre une session d'envoi : retourne { code, expiresAt } ou { error }.
-  startSend: (filePaths) => ipcRenderer.invoke('send:start', filePaths),
+  // Démarre une session d'envoi (fichiers et/ou dossiers) : le main étend
+  // les dossiers. Retourne { code, expiresAt, files, folder } ou { error }.
+  startSend: (paths) => ipcRenderer.invoke('send:start', paths),
   // Ouvre le sélecteur de fichiers natif : retourne un tableau de chemins.
   chooseFiles: () => ipcRenderer.invoke('dialog:chooseFiles'),
-  // Résout le chemin disque d'un File issu d'un drag & drop (sandbox oblige).
+  // Ouvre le sélecteur de dossier : retourne un tableau (0 ou 1 chemin).
+  chooseFolder: () => ipcRenderer.invoke('dialog:chooseFolder'),
+  // Résout le chemin disque d'un File/dossier issu d'un drag & drop.
   getFilePath: (file) => {
     try { return webUtils.getPathForFile(file) } catch { return null }
   },

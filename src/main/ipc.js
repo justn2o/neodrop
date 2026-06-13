@@ -9,10 +9,13 @@
 const os = require('os')
 const path = require('path')
 const fs = require('fs')
+const fsp = require('fs/promises')
 const { ipcMain, dialog, app, shell } = require('electron')
 const { generateCode, normalizeCode } = require('./code')
 const { SwarmSession, CODE_TTL_MS, MAX_AUTH_FAILURES } = require('./swarm')
 const { TransferSender, TransferReceiver, cleanupAllPartFiles } = require('./transfer')
+
+const MAX_FILES = 5000 // garde-fou : nombre de fichiers par transfert
 
 // Une seule session (envoi OU réception) à la fois : c'est le parcours
 // voulu, et cela simplifie tous les états d'erreur.
@@ -56,10 +59,55 @@ async function teardownSession () {
   const s = current
   current = null
   if (!s) return
-  try { if (s.transfer) s.transfer.removeAllListeners() } catch {}
+  // dispose() marque le transfert comme terminé et neutralise ses écouteurs
+  // AVANT que la socket ne soit détruite : sans cela, le 'close' de la
+  // FrameStream rappellerait _fail() → emit('error') sur un EventEmitter
+  // sans listener (exception non gérée dans le process main).
+  if (s.transfer) {
+    try { await s.transfer.dispose() } catch {}
+  }
   if (s.swarmSession) {
     s.swarmSession.removeAllListeners()
     await s.swarmSession.close().catch(() => {})
+  }
+}
+
+/**
+ * Étend une liste de chemins de haut niveau (fichiers et/ou dossiers) en
+ * une liste plate d'entrées { path, relPath }. Les dossiers sont parcourus
+ * récursivement, relPath conservant l'arborescence (séparateur « / »
+ * canonique sur le réseau). Toute la résolution disque reste dans le main.
+ */
+async function expandEntries (paths) {
+  const entries = []
+  for (const p of paths) {
+    const st = await fsp.stat(p).catch(() => null)
+    if (!st) throw new Error(`Chemin introuvable : ${path.basename(String(p))}`)
+    if (st.isFile()) {
+      entries.push({ path: p, relPath: path.basename(p) })
+    } else if (st.isDirectory()) {
+      await walkDir(p, path.basename(p), entries)
+    } else {
+      throw new Error(`Élément non pris en charge : ${path.basename(p)}`)
+    }
+    if (entries.length > MAX_FILES) throw new Error(`Transfert trop volumineux (plus de ${MAX_FILES} fichiers).`)
+  }
+  if (entries.length === 0) throw new Error('Aucun fichier à envoyer (dossier vide ?).')
+  return entries
+}
+
+async function walkDir (dir, rel, entries) {
+  const items = await fsp.readdir(dir, { withFileTypes: true })
+  for (const it of items) {
+    if (entries.length > MAX_FILES) return
+    const full = path.join(dir, it.name)
+    const childRel = `${rel}/${it.name}`
+    if (it.isDirectory()) {
+      await walkDir(full, childRel, entries)
+    } else if (it.isFile()) {
+      entries.push({ path: full, relPath: childRel })
+    }
+    // Liens symboliques et autres types ignorés (sécurité + simplicité).
   }
 }
 
@@ -78,19 +126,21 @@ function humanError (err) {
 
 /* ----------------------------- envoi ----------------------------- */
 
-async function startSend (win, filePaths) {
+async function startSend (win, paths) {
   await teardownSession()
 
-  // Validation des chemins avant tout.
-  if (!Array.isArray(filePaths) || filePaths.length === 0) {
+  if (!Array.isArray(paths) || paths.length === 0) {
     throw new Error('Aucun fichier sélectionné.')
   }
+  // Expansion des dossiers en arborescence de fichiers (avec leurs chemins
+  // relatifs), et métadonnées résumées pour l'écran d'attente.
+  const entries = await expandEntries(paths)
   const filesMeta = []
-  for (const p of filePaths) {
-    const st = fs.statSync(p, { throwIfNoEntry: false })
-    if (!st || !st.isFile()) throw new Error(`Fichier introuvable : ${path.basename(String(p))}`)
-    filesMeta.push({ name: path.basename(p), size: st.size })
+  for (const e of entries) {
+    const st = await fsp.stat(e.path)
+    filesMeta.push({ name: path.basename(e.relPath), relPath: e.relPath, size: st.size })
   }
+  const isFolder = entries.some((e) => e.relPath.includes('/'))
 
   const code = generateCode()
   const session = new SwarmSession({ code, role: 'sender' })
@@ -115,7 +165,7 @@ async function startSend (win, filePaths) {
   session.on('peer-authenticated', ({ frames, connectionType }) => {
     emitToRenderer(win, 'peer-authenticated', { connectionType })
 
-    const sender = new TransferSender(frames, filePaths, { senderName: os.hostname() })
+    const sender = new TransferSender(frames, entries, { senderName: os.hostname() })
     if (current) current.transfer = sender
 
     sender.on('offer-sent', ({ files, totalSize }) =>
@@ -145,7 +195,7 @@ async function startSend (win, filePaths) {
   })
 
   await session.start()
-  return { code, expiresAt: Date.now() + CODE_TTL_MS, files: filesMeta }
+  return { code, expiresAt: Date.now() + CODE_TTL_MS, files: filesMeta, folder: isFolder }
 }
 
 /* --------------------------- réception --------------------------- */
@@ -253,6 +303,14 @@ function registerIpcHandlers (getWindow) {
     return res.canceled ? [] : res.filePaths
   })
 
+  ipcMain.handle('dialog:chooseFolder', async () => {
+    const res = await dialog.showOpenDialog(getWindow(), {
+      title: 'Choisir le dossier à envoyer',
+      properties: ['openDirectory']
+    })
+    return res.canceled ? [] : res.filePaths
+  })
+
   ipcMain.handle('dialog:chooseDir', async () => {
     const res = await dialog.showOpenDialog(getWindow(), {
       title: 'Choisir le dossier de destination',
@@ -273,7 +331,7 @@ function registerIpcHandlers (getWindow) {
 /** À appeler à la fermeture de l'app : coupe tout et nettoie les .part. */
 async function shutdown () {
   await teardownSession()
-  cleanupAllPartFiles()
+  await cleanupAllPartFiles()
 }
 
 module.exports = { registerIpcHandlers, shutdown }

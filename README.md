@@ -8,11 +8,14 @@ punching).
 
 ## Fonctionnement
 
-1. **Envoyer** : glisse un ou plusieurs fichiers dans l'application. Un code
-   d'appairage court est généré (ex. `TIGRE-7342`).
+1. **Envoyer** : glisse un ou plusieurs fichiers — **ou un dossier entier** —
+   dans l'application (ou via les boutons « Fichiers… » / « Dossier… »). Un
+   code d'appairage court est généré (ex. `TIGRE-7342`).
 2. **Recevoir** : sur l'autre PC, n'importe où dans le monde, saisis le code.
-3. Le destinataire **confirme explicitement** le transfert et choisit le
-   dossier de destination — rien ne s'écrit sur son disque avant son accord.
+3. Le destinataire **confirme explicitement** le transfert et **choisit le
+   dossier de destination** (bouton « Modifier… », mémorisé) — rien ne s'écrit
+   sur son disque avant son accord. L'arborescence d'un dossier est recréée à
+   l'identique.
 4. Transfert avec progression des deux côtés (vitesse, temps restant), puis
    **vérification d'intégrité SHA-256**.
 5. Le code est à **usage unique** et expire après **15 minutes** sans connexion.
@@ -30,7 +33,9 @@ punching).
   `nodeIntegration: false`, `sandbox: true`. Toute la logique réseau/fichiers
   vit dans le process main.
 - Noms de fichiers reçus assainis (pas de `../`, caractères interdits Windows,
-  noms réservés) ; collisions gérées (`fichier (1).ext`).
+  noms réservés) ; collisions gérées (`fichier (1).ext`). Pour un dossier,
+  chaque composante du chemin relatif est assainie : impossible d'écrire hors
+  du dossier de destination.
 
 ## Prérequis
 

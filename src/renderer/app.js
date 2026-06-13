@@ -21,7 +21,8 @@ function renderFileList (container, files) {
     row.className = 'file-row'
     const name = document.createElement('span')
     name.className = 'name'
-    name.textContent = f.name
+    // Pour un dossier, on montre le chemin relatif (arborescence) si dispo.
+    name.textContent = f.relPath || f.name
     const size = document.createElement('span')
     size.className = 'size'
     size.textContent = formatBytes(f.size)
@@ -114,6 +115,7 @@ const dropZone = $('drop-zone')
 dropZone.addEventListener('click', () => browseAndSend())
 dropZone.addEventListener('keydown', (e) => { if (e.key === 'Enter') browseAndSend() })
 $('btn-browse').addEventListener('click', (e) => { e.stopPropagation(); browseAndSend() })
+$('btn-browse-folder').addEventListener('click', (e) => { e.stopPropagation(); browseFolderAndSend() })
 
 dropZone.addEventListener('dragover', (e) => {
   e.preventDefault()
@@ -134,14 +136,27 @@ async function browseAndSend () {
   if (paths.length > 0) startSending(paths)
 }
 
+async function browseFolderAndSend () {
+  const paths = await window.api.chooseFolder()
+  if (paths.length > 0) startSending(paths)
+}
+
 async function startSending (paths) {
   role = 'sender'
+  // Préparation des fichiers/dossiers (calcul des hash, arborescence) :
+  // sur un gros dossier cela peut prendre un instant.
+  $('wait-status').textContent = 'Préparation…'
   const res = await window.api.startSend(paths)
   if (res.error) return showError(res.error)
 
   $('pairing-code').textContent = res.code
   $('wait-status').textContent = 'En attente du destinataire…'
   renderFileList($('wait-files'), res.files || [])
+  if (res.folder) {
+    const n = (res.files || []).length
+    $('wait-files').insertAdjacentHTML('afterbegin',
+      `<div class="file-row"><span class="name">📁 Dossier — ${n} fichier(s)</span></div>`)
+  }
   startExpiryCountdown(res.expiresAt)
   showScreen('screen-wait')
 }
@@ -334,9 +349,14 @@ window.api.onEvent(({ type, data }) => {
       currentOffer = data
       destDir = data.defaultDir
       const total = data.files.reduce((a, f) => a + f.size, 0)
-      const fileDesc = data.files.length === 1
-        ? `« ${data.files[0].name} » (${formatBytes(total)})`
-        : `${data.files.length} fichiers (${formatBytes(total)})`
+      let fileDesc
+      if (data.folder) {
+        fileDesc = `un dossier (${data.files.length} fichier(s), ${formatBytes(total)})`
+      } else if (data.files.length === 1) {
+        fileDesc = `« ${data.files[0].name} » (${formatBytes(total)})`
+      } else {
+        fileDesc = `${data.files.length} fichiers (${formatBytes(total)})`
+      }
       $('confirm-text').innerHTML = ''
       const strong = document.createElement('strong')
       strong.textContent = data.sender
