@@ -1,23 +1,12 @@
 'use strict'
 
-/**
- * Découverte sur le réseau local (mDNS) — complément facultatif à la DHT.
- *
- * Quand les deux pairs sont sur le même réseau (maison, bureau), passer par
- * Internet et le hole punching est inutile : on peut se trouver en quelques
- * millisecondes via mDNS et se connecter en direct. La DHT Hyperswarm reste
- * lancée en parallèle ; le premier pair authentifié gagne (voir swarm.js).
- *
- * Sécurité : la socket TCP locale est enveloppée dans le MÊME protocole Noise
- * (@hyperswarm/secret-stream) que Hyperswarm — la confidentialité de bout en
- * bout est préservée sur le LAN. L'authentification (preuve de connaissance
- * du code) reste assurée par le challenge-réponse HMAC de swarm.js.
- *
- * Le nom annoncé sur le LAN est une empreinte du topic (et non le topic lui-
- * même) : il identifie le rendez-vous sans rien révéler d'exploitable.
- * Tout échec (pas d'interface, multicast bloqué…) désactive simplement le LAN
- * sans jamais faire échouer le transfert : la DHT prend le relais.
- */
+// Optional local-network discovery (mDNS), in addition to the DHT. When both
+// peers are on the same network they find each other in milliseconds and
+// connect directly. The TCP socket is wrapped in the same Noise protocol as
+// Hyperswarm, so end-to-end encryption is preserved; authentication is still
+// the HMAC challenge-response in swarm.js. Any failure (no interface, multicast
+// blocked) just disables the LAN path and the DHT takes over. The advertised
+// label is a digest of the topic, not the topic itself.
 
 const os = require('os')
 const net = require('net')
@@ -38,7 +27,6 @@ function lanIPv4 () {
 class LanDiscovery extends EventEmitter {
   constructor (topic) {
     super()
-    // Étiquette mDNS = empreinte du topic (ne révèle pas le topic).
     this.label = crypto.createHash('sha256').update(topic).digest('hex').slice(0, 24) + '.neodrop.local'
     this.ip = lanIPv4()
     this.mdns = null
@@ -50,7 +38,7 @@ class LanDiscovery extends EventEmitter {
   }
 
   start () {
-    if (!this.ip) return // aucune interface réseau locale exploitable
+    if (!this.ip) return
     try {
       this.server = net.createServer((socket) => this._onTcp(socket, false))
       this.server.on('error', () => {})
@@ -113,7 +101,7 @@ class LanDiscovery extends EventEmitter {
     }
     if (!ip) ip = rinfo && rinfo.address
     if (!ip || !port) return
-    if (ip === this.ip && port === this.port) return // c'est nous-même
+    if (ip === this.ip && port === this.port) return
     const key = `${ip}:${port}`
     if (this._seen.has(key)) return
     this._seen.add(key)
@@ -133,8 +121,6 @@ class LanDiscovery extends EventEmitter {
       return
     }
     enc.on('error', () => {})
-    // La socket chiffrée bufferise les écritures jusqu'à la fin du handshake
-    // Noise : on peut l'exposer immédiatement, l'auth HMAC suivra.
     this.emit('connection', enc, { client: initiator, lan: true })
   }
 

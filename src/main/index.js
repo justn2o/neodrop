@@ -1,10 +1,8 @@
 'use strict'
 
-/**
- * Point d'entrée Electron : cycle de vie de l'application et fenêtre unique.
- * Sécurité : contextIsolation, sandbox, pas de nodeIntegration — le
- * renderer ne parle au main que via l'API minimale du preload.
- */
+// Electron entry point: app lifecycle and the single window.
+// Hardened renderer: contextIsolation, sandbox, no nodeIntegration - the
+// renderer talks to main only through the minimal preload API.
 
 const path = require('path')
 const { app, BrowserWindow, Tray, Menu, nativeImage } = require('electron')
@@ -43,10 +41,7 @@ function showWindow () {
   else { mainWindow.show(); mainWindow.focus() }
 }
 
-/**
- * Icône dans la zone de notification : permet de garder un code en attente
- * en arrière-plan et de revenir à la fenêtre d'un clic. Best-effort.
- */
+// Tray icon: keep a pending code in the background and return with one click.
 function createTray () {
   try {
     const img = nativeImage.createFromPath(TRAY_ICON_PATH)
@@ -54,16 +49,13 @@ function createTray () {
     tray = new Tray(img)
     tray.setToolTip('NeoDrop')
     tray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Ouvrir NeoDrop', click: showWindow },
+      { label: 'Open NeoDrop', click: showWindow },
       { type: 'separator' },
-      { label: 'Quitter', click: () => app.quit() }
+      { label: 'Quit', click: () => app.quit() }
     ]))
     tray.on('click', showWindow)
   } catch { tray = null }
 }
-
-// Une seule instance UI par profil utilisateur n'est PAS imposée : pouvoir
-// lancer deux instances sur la même machine sert justement aux tests locaux.
 
 app.whenReady().then(() => {
   registerIpcHandlers(() => mainWindow)
@@ -79,8 +71,6 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-// Fermeture pendant un transfert : on coupe la session proprement et on
-// supprime les fichiers temporaires .part.
 let quitting = false
 app.on('before-quit', (event) => {
   if (quitting) return

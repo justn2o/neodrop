@@ -1,16 +1,14 @@
 #!/usr/bin/env node
 'use strict'
 
-/**
- * NeoDrop en ligne de commande — même cœur P2P que l'application, sans
- * interface Electron. Pratique pour les scripts et les machines sans bureau.
- *
- *   neodrop send <fichier|dossier>...  [--pass PHRASE] [--strength high|max]
- *                                      [--no-compress] [--limit Mo/s]
- *   neodrop receive <CODE> [--out DOSSIER] [--pass PHRASE] [--yes]
- *
- * Le transfert reste chiffré de bout en bout et vérifié par SHA-256.
- */
+// NeoDrop command line - same P2P core as the app, no Electron UI.
+//
+//   neodrop                              interactive menu
+//   neodrop send <file|folder>...  [--pass PHRASE] [--strength high|max]
+//                                  [--no-compress] [--limit MB/s]
+//   neodrop receive <CODE> [--out DIR] [--pass PHRASE] [--yes]
+//
+// Transfers stay end-to-end encrypted and SHA-256 verified.
 
 const os = require('os')
 const path = require('path')
@@ -54,13 +52,13 @@ async function expandEntries (paths) {
     if (st.isFile()) entries.push({ path: p, relPath: path.basename(p) })
     else if (st.isDirectory()) await walk(p, path.basename(p))
   }
-  if (entries.length === 0) throw new Error('Aucun fichier à envoyer.')
+  if (entries.length === 0) throw new Error('No file to send.')
   return entries
 }
 
 function fmtBytes (n) {
-  if (n < 1024) return `${n} o`
-  const u = ['Ko', 'Mo', 'Go', 'To']; let v = n; let i = -1
+  if (n < 1024) return `${n} B`
+  const u = ['KB', 'MB', 'GB', 'TB']; let v = n; let i = -1
   do { v /= 1024; i++ } while (v >= 1024 && i < u.length - 1)
   return `${v.toFixed(1)} ${u[i]}`
 }
@@ -69,15 +67,15 @@ function progressBar (p) {
   const pct = p.totalSize > 0 ? p.totalBytes / p.totalSize : 0
   const width = 28
   const filled = Math.round(pct * width)
-  const bar = '█'.repeat(filled) + '░'.repeat(width - filled)
+  const bar = '#'.repeat(filled) + '-'.repeat(width - filled)
   const speed = p.speed ? `${fmtBytes(p.speed)}/s` : ''
   const line = `  [${bar}] ${(pct * 100).toFixed(0).padStart(3)} %  ${fmtBytes(p.totalBytes)}/${fmtBytes(p.totalSize)}  ${speed}   `
   readline.cursorTo(process.stdout, 0)
   process.stdout.write(line)
 }
 
-// Interface readline UNIQUE et réutilisée : recréer une interface par question
-// fait perdre les lignes déjà en tampon (saisie collée / redirigée).
+// Single reused readline interface (recreating one per prompt loses buffered
+// lines on pasted/piped input).
 let _rl = null
 function ask (question) {
   if (!_rl) _rl = readline.createInterface({ input: process.stdin, output: process.stdout })
@@ -106,33 +104,33 @@ async function doSend (paths, flags) {
     process.exit(codeNum)
   }
 
-  session.on('expired', () => finish(1, 'Code expiré (15 min sans connexion).'))
-  session.on('invalidated', () => finish(1, 'Code invalidé (3 tentatives erronées).'))
-  session.on('error', (e) => finish(1, 'Erreur : ' + e.message))
+  session.on('expired', () => finish(1, 'Code expired (15 min with no connection).'))
+  session.on('invalidated', () => finish(1, 'Code invalidated (3 wrong attempts).'))
+  session.on('error', (e) => finish(1, 'Error: ' + e.message))
   session.on('peer-authenticated', ({ frames, connectionType }) => {
-    process.stdout.write(`\nDestinataire connecté (connexion ${connectionType || 'directe'}).\n`)
+    process.stdout.write(`\nRecipient connected (${connectionType || 'direct'} connection).\n`)
     const sender = new TransferSender(frames, entries, {
       senderName: os.hostname(),
       compression: flags.compress !== false,
       rateLimit: flags.limit > 0 ? Math.round(flags.limit * 1024 * 1024) : 0
     })
     sender.on('progress', progressBar)
-    sender.on('rejected', () => finish(1, 'Le destinataire a refusé.'))
-    sender.on('cancelled', () => finish(1, 'Transfert annulé.'))
-    sender.on('error', (e) => finish(1, 'Erreur : ' + e.message))
-    sender.on('done', () => finish(0, 'Transfert terminé, intégrité vérifiée.'))
+    sender.on('rejected', () => finish(1, 'The recipient declined.'))
+    sender.on('cancelled', () => finish(1, 'Transfer cancelled.'))
+    sender.on('error', (e) => finish(1, 'Error: ' + e.message))
+    sender.on('done', () => finish(0, 'Transfer complete, integrity verified.'))
     sender.start()
   })
 
   await session.start()
-  console.log(`\n  Code d'appairage :  ${code}`)
-  if (passphrase) console.log('  (passphrase requise du côté destinataire)')
-  console.log(`  ${entries.length} fichier(s), ${fmtBytes(total)}. En attente du destinataire…\n`)
+  console.log(`\n  Pairing code:  ${code}`)
+  if (passphrase) console.log('  (passphrase required on the recipient side)')
+  console.log(`  ${entries.length} file(s), ${fmtBytes(total)}. Waiting for the recipient...\n`)
 }
 
 async function doReceive (rawCode, flags) {
   const code = normalizeCode(rawCode)
-  if (!code) throw new Error('Code invalide. Format attendu : MOT-1234.')
+  if (!code) throw new Error('Invalid code. Expected format: WORD-1234.')
   const outDir = path.resolve(flags.out || process.cwd())
   const passphrase = flags.pass || ''
 
@@ -145,76 +143,71 @@ async function doReceive (rawCode, flags) {
     process.exit(codeNum)
   }
 
-  session.on('timeout', () => finish(1, "Expéditeur introuvable (30 s). Vérifie le code."))
-  session.on('auth-failed', () => process.stdout.write('Code/passphrase incorrect, nouvelle tentative…\n'))
-  session.on('error', (e) => finish(1, 'Erreur : ' + e.message))
+  session.on('timeout', () => finish(1, 'Sender not found (30s). Check the code.'))
+  session.on('auth-failed', () => process.stdout.write('Wrong code/passphrase, retrying...\n'))
+  session.on('error', (e) => finish(1, 'Error: ' + e.message))
   session.on('peer-authenticated', ({ frames }) => {
     const receiver = new TransferReceiver(frames, { resumeDir: resumeDir() })
     receiver.on('offer', async (offer) => {
       const total = offer.files.reduce((a, f) => a + f.size, 0)
-      console.log(`\n${offer.sender} propose ${offer.files.length} fichier(s) (${fmtBytes(total)})` +
-        (offer.folder ? ' [dossier]' : '') + ` → ${outDir}`)
+      console.log(`\n${offer.sender} offers ${offer.files.length} file(s) (${fmtBytes(total)})` +
+        (offer.folder ? ' [folder]' : '') + ` -> ${outDir}`)
       if (!flags.yes) {
-        const a = (await ask('Accepter ? [o/N] ')).trim().toLowerCase()
-        if (a !== 'o' && a !== 'oui' && a !== 'y') { receiver.reject(); return finish(0, 'Refusé.') }
+        const a = (await ask('Accept? [y/N] ')).trim().toLowerCase()
+        if (a !== 'y' && a !== 'yes') { receiver.reject(); return finish(0, 'Declined.') }
       }
       await receiver.accept(outDir)
     })
     receiver.on('progress', progressBar)
-    receiver.on('cancelled', () => finish(1, "L'expéditeur a annulé."))
-    receiver.on('error', (e) => finish(1, 'Erreur : ' + e.message))
+    receiver.on('cancelled', () => finish(1, 'The sender cancelled.'))
+    receiver.on('error', (e) => finish(1, 'Error: ' + e.message))
     receiver.on('done', ({ files }) => {
-      let out = '\nReçu, intégrité vérifiée :\n'
-      for (const f of files) out += `  • ${f.relPath || f.name}\n`
-      // Petit délai avant de fermer : laisse le DONE_ACK parvenir à
-      // l'expéditeur (sinon il signale une coupure au lieu d'un succès).
+      let out = '\nReceived, integrity verified:\n'
+      for (const f of files) out += `  - ${f.relPath || f.name}\n`
+      // Small delay before closing: let the DONE_ACK reach the sender.
       setTimeout(() => finish(0, out), 1200)
     })
   })
 
   await session.start()
-  console.log("Recherche de l'expéditeur…")
+  console.log('Looking for the sender...')
 }
 
 function usage () {
-  console.log(`NeoDrop CLI — transfert de fichiers P2P chiffré
+  console.log(`NeoDrop CLI - encrypted P2P file transfer
 
-Usage :
-  neodrop                              menu interactif (Envoyer / Recevoir)
-  neodrop send <fichier|dossier>...  [--pass PHRASE] [--strength high|max]
-                                     [--no-compress] [--limit Mo/s]
-  neodrop receive <CODE> [--out DOSSIER] [--pass PHRASE] [--yes]
+Usage:
+  neodrop                          interactive menu (Send / Receive)
+  neodrop send <file|folder>...  [--pass PHRASE] [--strength high|max]
+                                 [--no-compress] [--limit MB/s]
+  neodrop receive <CODE> [--out DIR] [--pass PHRASE] [--yes]
 `)
 }
 
-/** Nettoie un chemin saisi/collé : retire les guillemets éventuels. */
 function cleanPath (s) {
   return String(s).trim().replace(/^["']+|["']+$/g, '').trim()
 }
 
-/** Menu interactif lancé quand « neodrop » est appelé sans argument. */
 async function interactive () {
-  console.log('\n  ⇄  NeoDrop — transfert de fichiers P2P chiffré\n')
-  const choice = (await ask('  [1] Envoyer    [2] Recevoir    [q] Quitter\n  > ')).trim().toLowerCase()
+  console.log('\n  NeoDrop - encrypted P2P file transfer\n')
+  const choice = (await ask('  [1] Send    [2] Receive    [q] Quit\n  > ')).trim().toLowerCase()
 
-  if (['1', 'e', 'envoyer'].includes(choice)) {
+  if (['1', 's', 'send'].includes(choice)) {
     let p = ''
-    while (!p) p = cleanPath(await ask('\n  Fichier ou dossier à envoyer : '))
-    const strong = (await ask('  Code renforcé (2 mots) ? [o/N] : ')).trim().toLowerCase()
-    const pass = (await ask('  Passphrase (Entrée = aucune) : ')).trim()
+    while (!p) p = cleanPath(await ask('\n  File or folder to send: '))
+    const strong = (await ask('  Stronger code (2 words)? [y/N] ')).trim().toLowerCase()
+    const pass = (await ask('  Passphrase (Enter for none): ')).trim()
     const flags = {}
-    if (['o', 'oui', 'y'].includes(strong)) flags.strength = 'high'
+    if (['y', 'yes'].includes(strong)) flags.strength = 'high'
     if (pass) flags.pass = pass
     closePrompts()
     console.log('')
     await doSend([p], flags)
-  } else if (['2', 'r', 'recevoir'].includes(choice)) {
+  } else if (['2', 'r', 'receive'].includes(choice)) {
     let code = ''
-    while (!code) code = (await ask('\n  Code reçu (ex. TIGRE-7342) : ')).trim()
-    const pass = (await ask('  Passphrase (Entrée = aucune) : ')).trim()
-    const out = cleanPath(await ask('  Dossier de destination (Entrée = dossier courant) : ')) || process.cwd()
-    // L'utilisateur a explicitement choisi de recevoir et saisi le code :
-    // on accepte sans reposer la question (et on libère la saisie).
+    while (!code) code = (await ask('\n  Code received (e.g. TIGER-7342): ')).trim()
+    const pass = (await ask('  Passphrase (Enter for none): ')).trim()
+    const out = cleanPath(await ask('  Destination folder (Enter for current): ')) || process.cwd()
     const flags = { out, yes: true }
     if (pass) flags.pass = pass
     closePrompts()
@@ -238,12 +231,12 @@ async function main () {
     } else if (cmd === '-h' || cmd === '--help' || cmd === 'help') {
       usage(); process.exit(0)
     } else if (!cmd) {
-      await interactive() // « neodrop » seul → menu interactif
+      await interactive()
     } else {
       usage(); process.exit(2)
     }
   } catch (err) {
-    console.error('Erreur :', err.message)
+    console.error('Error:', err.message)
     process.exit(1)
   }
 }
