@@ -2,159 +2,614 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NeoDrop — peer-to-peer file transfer</title>
-<meta name="description" content="Send files and folders straight to another computer with a short code. No server, end-to-end encrypted.">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NeoDrop — direct file transfer, computer to computer</title>
+<meta name="description" content="NeoDrop opens a direct encrypted connection between two computers, wherever they are. A short code pairs the machines; the file never touches a server. SHA-256 verification, local discovery, resume after a drop.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700;12..96,800&family=Geist:wght@300;400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script>document.documentElement.classList.add('js')</script>
 <style>
-  :root{
-    --bg:#f6f7f9; --surface:#fff; --text:#1b1f24; --muted:#6b7280;
-    --accent:#2563eb; --accent-dark:#1d4ed8; --border:#e2e5ea; --radius:14px;
-  }
-  *{box-sizing:border-box;margin:0;padding:0}
-  html{scroll-behavior:smooth}
-  body{
-    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-    background:var(--bg);color:var(--text);line-height:1.6;
-  }
-  a{color:var(--accent);text-decoration:none}
-  a:hover{text-decoration:underline}
-  .wrap{max-width:960px;margin:0 auto;padding:0 24px}
+/* NeoDrop landing page. Light theme, single blue accent, the direct line
+   between two machines as the structuring motif. */
 
-  header{
-    background:linear-gradient(160deg,#1d4ed8,#2563eb 55%,#3b82f6);
-    color:#fff;text-align:center;padding:80px 24px 72px;
-  }
-  .logo{
-    width:84px;height:84px;margin:0 auto 20px;border-radius:22px;
-    background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.25);
-    display:flex;align-items:center;justify-content:center;font-size:42px;
-  }
-  header h1{font-size:46px;letter-spacing:-1px;font-weight:750}
-  header p.tag{font-size:20px;opacity:.92;margin-top:12px}
-  .cta{margin-top:28px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
-  .btn{
-    display:inline-block;padding:12px 22px;border-radius:10px;font-weight:600;
-    border:1px solid transparent;cursor:pointer;font-size:15px;
-  }
-  .btn.primary{background:#fff;color:var(--accent-dark)}
-  .btn.primary:hover{background:#eef2ff;text-decoration:none}
-  .btn.ghost{border-color:rgba(255,255,255,.5);color:#fff}
-  .btn.ghost:hover{background:rgba(255,255,255,.12);text-decoration:none}
+:root{
+  --bg:#f5f6f8;
+  --surface:#ffffff;
+  --ink:#0e1626;
+  --ink-2:#16203a;
+  --text:#141922;
+  --body:#414956;
+  --muted:#6b7280;
+  --faint:#9aa1ac;
+  --accent:#2563eb;
+  --accent-dark:#1d4ed8;
+  --accent-soft:#eaf0ff;
+  --accent-line:#c4d6fb;
+  --green:#15803d;
+  --line:#e4e7ec;
+  --line-2:#d6dae1;
 
-  section{padding:64px 0}
-  h2{font-size:28px;letter-spacing:-.4px;text-align:center;margin-bottom:8px}
-  .sub{text-align:center;color:var(--muted);margin-bottom:40px}
+  --r:10px;
+  --r-lg:16px;
 
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:18px}
-  .card{
-    background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
-    padding:22px;
-  }
-  .card .ic{font-size:24px}
-  .card h3{font-size:17px;margin:10px 0 6px}
-  .card p{color:var(--muted);font-size:15px}
+  --step:1.5rem;
+  --maxw:1160px;
 
-  .steps{counter-reset:s;max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
-  .step{display:flex;gap:16px;align-items:flex-start}
-  .step .n{
-    counter-increment:s;flex:0 0 36px;height:36px;border-radius:50%;
-    background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;
-  }
-  .step .n::before{content:counter(s)}
-  .step p{padding-top:5px}
-  .step b{color:var(--text)}
+  --e-out:cubic-bezier(.16,1,.3,1);
+  --e-io:cubic-bezier(.65,.05,.36,1);
 
-  .secure{background:var(--surface);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
-  .secure ul{max-width:720px;margin:0 auto;list-style:none;display:grid;gap:12px}
-  .secure li{padding-left:28px;position:relative;color:var(--muted)}
-  .secure li::before{content:"\2713";position:absolute;left:0;color:#16a34a;font-weight:700}
-  .secure li b{color:var(--text)}
+  --z-sticky:100;
+  --z-overlay:200;
+}
 
-  pre{
-    background:#0f172a;color:#e2e8f0;border-radius:12px;padding:18px 20px;overflow:auto;
-    font-size:14px;line-height:1.7;max-width:720px;margin:0 auto;
-  }
-  .muted{color:var(--muted)}
-  footer{text-align:center;padding:40px 24px;color:var(--muted);font-size:14px}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+
+body{
+  font-family:"Geist","Segoe UI",system-ui,sans-serif;
+  background:var(--bg);
+  color:var(--body);
+  font-size:16px;
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+  overflow-x:hidden;
+}
+
+h1,h2,h3,h4{
+  font-family:"Bricolage Grotesque","Geist",sans-serif;
+  color:var(--text);
+  font-weight:700;
+  letter-spacing:-.02em;
+  line-height:1.05;
+  text-wrap:balance;
+}
+p{text-wrap:pretty}
+a{color:inherit;text-decoration:none}
+.mono{font-family:"Geist Mono",ui-monospace,monospace;font-feature-settings:"ss01"}
+
+.wrap{max-width:var(--maxw);margin-inline:auto;padding-inline:clamp(20px,5vw,40px)}
+.lede{max-width:60ch}
+
+.glyph{
+  display:inline-flex;align-items:center;justify-content:center;
+  background:var(--accent);color:#fff;border-radius:9px;font-weight:600;flex-shrink:0;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.28), 0 5px 14px -6px rgba(37,99,235,.55);
+}
+
+.btn{
+  --bg-btn:var(--surface);--fg-btn:var(--text);--bd-btn:var(--line-2);
+  display:inline-flex;align-items:center;gap:8px;
+  font-family:"Geist",sans-serif;font-size:15px;font-weight:600;
+  padding:11px 19px;border-radius:9px;cursor:pointer;
+  background:var(--bg-btn);color:var(--fg-btn);border:1px solid var(--bd-btn);
+  transition:transform .18s var(--e-out), border-color .18s var(--e-out),
+             background .18s var(--e-out), box-shadow .18s var(--e-out), color .18s var(--e-out);
+}
+.btn:hover{transform:translateY(-1px);border-color:var(--accent-line)}
+.btn:active{transform:translateY(0)}
+.btn .ar{transition:transform .22s var(--e-out)}
+.btn:hover .ar{transform:translateX(4px)}
+.btn.primary{--bg-btn:var(--accent);--fg-btn:#fff;--bd-btn:var(--accent);box-shadow:0 8px 22px -10px rgba(37,99,235,.7)}
+.btn.primary:hover{--bg-btn:var(--accent-dark);--bd-btn:var(--accent-dark);box-shadow:0 12px 28px -10px rgba(37,99,235,.8)}
+.btn.lg{padding:14px 26px;font-size:16px;border-radius:11px}
+.btn.bare{border-color:transparent;background:transparent;padding-inline:8px}
+.btn.bare:hover{color:var(--accent);transform:none}
+
+a:focus-visible,.btn:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:8px}
+
+header.nav{
+  position:sticky;top:0;z-index:var(--z-sticky);
+  background:var(--bg);
+  border-bottom:1px solid transparent;
+  transition:border-color .3s var(--e-out), box-shadow .3s var(--e-out);
+}
+header.nav.scrolled{border-bottom-color:var(--line);box-shadow:0 1px 0 rgba(20,25,34,.02)}
+.nav-in{display:flex;align-items:center;justify-content:space-between;height:66px}
+.brand{display:flex;align-items:center;gap:11px;font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:18px;letter-spacing:-.02em;color:var(--text)}
+.brand .glyph{width:30px;height:30px;font-size:16px}
+.nav-links{display:flex;align-items:center;gap:clamp(18px,3vw,34px)}
+.nav-links a:not(.btn){color:var(--muted);font-size:15px;font-weight:500;transition:color .18s var(--e-out)}
+.nav-links a:not(.btn):hover{color:var(--text)}
+@media(max-width:780px){.nav-links a:not(.btn){display:none}}
+
+.hero{padding:clamp(56px,9vw,104px) 0 0;position:relative}
+.hero-top{display:grid;grid-template-columns:1.15fr .85fr;gap:clamp(28px,5vw,64px);align-items:end}
+@media(max-width:880px){.hero-top{grid-template-columns:1fr;gap:32px;align-items:start}}
+
+.status{
+  display:inline-flex;align-items:center;gap:9px;
+  font-size:13.5px;font-weight:500;color:var(--body);
+  border:1px solid var(--line-2);border-radius:999px;padding:6px 13px 6px 11px;background:var(--surface);
+}
+.status .live{width:7px;height:7px;border-radius:50%;background:var(--green)}
+@media (prefers-reduced-motion:no-preference){
+  .status .live{animation:beat 2.6s var(--e-out) infinite}
+  @keyframes beat{0%{box-shadow:0 0 0 0 rgba(21,128,61,.5)}70%{box-shadow:0 0 0 6px rgba(21,128,61,0)}100%{box-shadow:0 0 0 0 rgba(21,128,61,0)}}
+}
+
+.hero h1{font-size:clamp(40px,7vw,82px);margin-top:22px;letter-spacing:-.035em}
+.hero h1 em{font-style:normal;color:var(--accent)}
+.hero .lede{font-size:clamp(17px,1.6vw,19.5px);color:var(--body);margin-top:24px}
+.hero-actions{display:flex;gap:13px;flex-wrap:wrap;margin-top:30px}
+.hero-meta{margin-top:20px;font-size:14px;color:var(--muted)}
+.hero-meta b{color:var(--body);font-weight:600}
+
+.readout{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);
+  padding:22px;box-shadow:0 1px 0 rgba(20,25,34,.02),0 24px 50px -34px rgba(20,25,34,.3);
+}
+.readout .rhead{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--muted)}
+.readout .rhead .mono{font-size:11.5px;letter-spacing:.04em}
+.endpoint{display:flex;align-items:center;gap:11px;padding:13px 2px}
+.endpoint .node{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;border:1px solid var(--line-2);background:var(--bg);font-size:15px;color:var(--accent);flex-shrink:0}
+.endpoint.b .node{color:var(--green)}
+.endpoint .et{font-size:12px;color:var(--muted)}
+.endpoint .ev{font-size:16px;color:var(--text);font-weight:500;letter-spacing:.02em}
+.endpoint.b .ev .caret{display:inline-block;width:2px;height:1.05em;background:var(--green);vertical-align:-2px;margin-left:1px}
+@media (prefers-reduced-motion:no-preference){.caret{animation:blink 1.05s step-end infinite}@keyframes blink{50%{opacity:0}}}
+.wire{position:relative;height:34px;margin:2px 0}
+.wire .rail{position:absolute;left:16px;right:16px;top:50%;height:2px;background:linear-gradient(90deg,var(--accent-line),#bfe3cc);border-radius:2px}
+.wire .pkt{position:absolute;top:50%;left:16px;width:7px;height:7px;border-radius:50%;background:var(--accent);transform:translateY(-50%);box-shadow:0 0 0 3px rgba(37,99,235,.16)}
+@media (prefers-reduced-motion:no-preference){.wire .pkt{animation:run 3s var(--e-io) infinite}@keyframes run{0%{left:16px;background:var(--accent)}50%{left:calc(100% - 23px);background:var(--green)}100%{left:16px;background:var(--accent)}}}
+.readout .rfoot{display:flex;gap:7px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.chk{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--body);background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:5px 9px}
+.chk svg{width:13px;height:13px;color:var(--green)}
+
+.trust{margin-top:clamp(48px,7vw,84px);padding:22px 0;border-block:1px solid var(--line);
+  display:flex;gap:clamp(16px,4vw,48px);flex-wrap:wrap;align-items:center;justify-content:space-between;
+  font-size:14px;color:var(--muted)}
+.trust .ti{display:flex;align-items:center;gap:9px}
+.trust .ti .mono{color:var(--text);font-weight:500}
+
+section.block{padding:clamp(64px,9vw,108px) 0}
+.head{max-width:62ch}
+.head h2{font-size:clamp(28px,4.4vw,46px)}
+.head p{color:var(--body);font-size:clamp(16px,1.5vw,18.5px);margin-top:16px;max-width:56ch}
+
+.flow{margin-top:clamp(40px,6vw,64px);position:relative}
+.flow-track{display:grid;grid-template-columns:repeat(4,1fr);gap:22px;position:relative}
+.flow-track::before{content:"";position:absolute;left:5%;right:5%;top:18px;height:2px;
+  background:repeating-linear-gradient(90deg,var(--line-2) 0 8px,transparent 8px 16px)}
+@media(max-width:760px){
+  .flow-track{grid-template-columns:1fr;gap:30px}
+  .flow-track::before{left:18px;right:auto;top:0;bottom:0;width:2px;height:auto;
+    background:repeating-linear-gradient(180deg,var(--line-2) 0 8px,transparent 8px 16px)}
+}
+.stepi{position:relative;padding-top:0}
+@media(max-width:760px){.stepi{padding-left:46px}}
+.stepi .pin{
+  width:38px;height:38px;border-radius:10px;background:var(--surface);border:1px solid var(--accent-line);
+  color:var(--accent);font-family:"Geist Mono",monospace;font-weight:600;font-size:14px;
+  display:flex;align-items:center;justify-content:center;position:relative;z-index:1;
+}
+@media(max-width:760px){.stepi .pin{position:absolute;left:0;top:0}}
+.stepi h3{font-size:18px;margin-top:18px}
+.stepi p{font-size:14.5px;color:var(--body);margin-top:7px;max-width:34ch}
+.stepi .tag{font-size:13px;color:var(--green);font-weight:600;margin-top:9px;display:inline-flex;align-items:center;gap:6px}
+
+.net{display:grid;grid-template-columns:.95fr 1.05fr;gap:clamp(28px,5vw,60px);align-items:center;margin-top:clamp(40px,6vw,56px)}
+@media(max-width:880px){.net{grid-template-columns:1fr;gap:30px}}
+.net h3{font-size:clamp(22px,3vw,30px)}
+.net p{color:var(--body);margin-top:14px;max-width:48ch}
+.net .pts{margin-top:22px;display:flex;flex-direction:column;gap:14px}
+.net .pt{display:flex;gap:13px;align-items:flex-start}
+.net .pt .d{flex-shrink:0;width:9px;height:9px;border-radius:50%;background:var(--accent);margin-top:8px}
+.net .pt.lan .d{background:var(--green)}
+.net .pt b{color:var(--text);font-weight:600}
+.net .pt span{font-size:14.5px;color:var(--body)}
+.schema{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:clamp(22px,3vw,34px);
+  box-shadow:0 24px 50px -38px rgba(20,25,34,.32)}
+.schema svg{width:100%;height:auto;display:block}
+
+.specs{margin-top:clamp(40px,6vw,56px);border-top:1px solid var(--line)}
+.spec{display:grid;grid-template-columns:minmax(190px,1fr) 2.4fr auto;gap:24px;align-items:baseline;
+  padding:22px 4px;border-bottom:1px solid var(--line);transition:background .2s var(--e-out)}
+.spec:hover{background:linear-gradient(90deg,var(--accent-soft),transparent 70%)}
+.spec h3{font-size:18px}
+.spec p{font-size:15px;color:var(--body);max-width:52ch}
+.spec .mark{font-family:"Geist Mono",monospace;font-size:12.5px;color:var(--accent);white-space:nowrap}
+@media(max-width:720px){
+  .spec{grid-template-columns:1fr;gap:6px;padding:20px 4px}
+  .spec .mark{order:-1;color:var(--muted)}
+}
+
+.crypt{background:var(--ink);color:#c9d3e3;border-radius:24px;margin-inline:clamp(0px,2vw,0px);
+  padding:clamp(52px,8vw,92px) 0;position:relative;overflow:hidden}
+.crypt::before{content:"";position:absolute;inset:0;opacity:.5;
+  background-image:linear-gradient(rgba(255,255,255,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.045) 1px,transparent 1px);
+  background-size:46px 46px;-webkit-mask-image:linear-gradient(180deg,#000,transparent 80%);mask-image:linear-gradient(180deg,#000,transparent 80%)}
+.crypt .wrap{position:relative}
+.crypt h2{color:#fff;font-size:clamp(28px,4.4vw,46px)}
+.crypt .head p{color:#93a2bd}
+.crypt-list{margin-top:clamp(40px,6vw,56px);border-top:1px solid rgba(255,255,255,.1)}
+.crow{display:grid;grid-template-columns:200px 1fr;gap:28px;align-items:baseline;
+  padding:24px 4px;border-bottom:1px solid rgba(255,255,255,.1)}
+@media(max-width:720px){.crow{grid-template-columns:1fr;gap:8px}}
+.crow .key{font-family:"Geist Mono",monospace;font-size:13px;color:#7ea6ff;letter-spacing:.01em}
+.crow h3{color:#fff;font-size:17px}
+.crow p{color:#93a2bd;font-size:14.5px;margin-top:6px;max-width:60ch}
+
+.cli{display:grid;grid-template-columns:.85fr 1.15fr;gap:clamp(28px,5vw,56px);align-items:center}
+@media(max-width:880px){.cli{grid-template-columns:1fr;gap:30px}}
+.cli h2{font-size:clamp(26px,3.6vw,40px)}
+.cli p{color:var(--body);margin-top:14px;max-width:42ch}
+.flags{margin-top:22px;display:flex;flex-wrap:wrap;gap:8px}
+.flag{font-family:"Geist Mono",monospace;font-size:12.5px;color:var(--body);border:1px solid var(--line-2);border-radius:7px;padding:5px 10px;background:var(--surface)}
+.term{background:var(--ink);border-radius:14px;overflow:hidden;border:1px solid var(--ink-2);
+  box-shadow:0 30px 64px -36px rgba(14,22,38,.7)}
+.term-bar{display:flex;align-items:center;gap:7px;padding:13px 16px;border-bottom:1px solid rgba(255,255,255,.07)}
+.term-bar i{width:11px;height:11px;border-radius:50%}
+.term-bar i:nth-child(1){background:#ff5f57}.term-bar i:nth-child(2){background:#febc2e}.term-bar i:nth-child(3){background:#28c840}
+.term-bar span{margin-left:9px;font-family:"Geist Mono",monospace;font-size:12.5px;color:#7d899f}
+.term-body{padding:22px 20px;font-family:"Geist Mono",monospace;font-size:13.5px;line-height:1.85;color:#cdd6e6}
+.term-body .pr{color:#7ea6ff}.term-body .fl{color:#febc2e}.term-body .ok{color:#34c759}.term-body .cm{color:#69748c}.term-body .code{color:#fff;font-weight:600;letter-spacing:.04em}
+.tcur{display:inline-block;width:8px;height:15px;background:#7ea6ff;vertical-align:-2px}
+@media (prefers-reduced-motion:no-preference){.tcur{animation:blink 1.05s step-end infinite}}
+
+.dl{margin-top:clamp(40px,6vw,56px);border-top:1px solid var(--line)}
+.drow{display:grid;grid-template-columns:auto 1fr auto;gap:22px;align-items:center;
+  padding:22px 4px;border-bottom:1px solid var(--line)}
+.drow .os{font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:20px;color:var(--text);min-width:120px}
+.drow .fmt{font-family:"Geist Mono",monospace;font-size:13px;color:var(--muted)}
+.dl-pair{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+@media(max-width:620px){.drow{grid-template-columns:1fr auto;gap:6px 16px}.drow .fmt{grid-column:1/-1}.dl-pair{justify-content:flex-start}}
+
+.final{padding:clamp(64px,9vw,110px) 0;text-align:center}
+.final .glyph{width:54px;height:54px;font-size:27px;border-radius:15px;margin-inline:auto;margin-bottom:24px}
+.final h2{font-size:clamp(32px,5.4vw,60px);max-width:16ch;margin-inline:auto;letter-spacing:-.035em}
+.final p{color:var(--body);font-size:18px;margin-top:16px}
+.final .hero-actions{justify-content:center;margin-top:30px}
+
+footer{border-top:1px solid var(--line);padding:48px 0 44px;font-size:14px;color:var(--muted)}
+.foot-in{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;align-items:flex-start}
+.foot-brand{display:flex;align-items:center;gap:10px;font-family:"Bricolage Grotesque",sans-serif;font-weight:700;color:var(--text)}
+.foot-brand .glyph{width:26px;height:26px;font-size:14px;border-radius:8px}
+.foot-links{display:flex;gap:24px;flex-wrap:wrap}
+.foot-links a:hover{color:var(--accent)}
+.foot-tags{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.tag-m{font-family:"Geist Mono",monospace;font-size:11.5px;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:3px 9px}
+
+@media (prefers-reduced-motion:no-preference){
+  .js .rv{opacity:0;transform:translateY(20px);transition:opacity .7s var(--e-out),transform .7s var(--e-out)}
+  .js .rv.in{opacity:1;transform:none}
+  .js .rv.s1{transition-delay:.07s}.js .rv.s2{transition-delay:.14s}.js .rv.s3{transition-delay:.21s}
+}
 </style>
 </head>
 <body>
 
-<header>
-  <div class="wrap">
-    <div class="logo">&#8644;</div>
-    <h1>NeoDrop</h1>
-    <p class="tag">Send files and folders straight to another computer &mdash; with a short code.</p>
-    <p class="tag" style="font-size:16px;opacity:.8">No server. No account. End-to-end encrypted.</p>
-    <div class="cta">
-      <a class="btn primary" href="https://github.com/justn2o/p2neo">View on GitHub</a>
-      <a class="btn ghost" href="#download">Download</a>
-    </div>
+<header class="nav" id="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top" aria-label="NeoDrop, home"><span class="glyph">⇄</span> NeoDrop</a>
+    <nav class="nav-links" aria-label="Main navigation">
+      <a href="#flow">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#security">Security</a>
+      <a href="#cli">Command line</a>
+      <a href="#download" class="btn primary">Download</a>
+    </nav>
   </div>
 </header>
 
-<section>
+<main id="top">
+
+<section class="hero">
   <div class="wrap">
-    <h2>Why NeoDrop</h2>
-    <p class="sub">It goes from one machine to the other &mdash; nothing is uploaded to the cloud.</p>
-    <div class="grid">
-      <div class="card"><div class="ic">&#128193;</div><h3>Files &amp; folders</h3><p>One file, many files, or a whole folder &mdash; the structure is rebuilt exactly on the other side.</p></div>
-      <div class="card"><div class="ic">&#128273;</div><h3>Simple pairing</h3><p>You get a short code like <b>TIGER-7342</b> (and a QR code to scan). The other person just types it in.</p></div>
-      <div class="card"><div class="ic">&#128274;</div><h3>End-to-end encrypted</h3><p>Direct, encrypted connection between the two computers. Every file is SHA-256 verified on arrival.</p></div>
-      <div class="card"><div class="ic">&#9889;</div><h3>Fast on a LAN</h3><p>Two computers on the same network find each other in milliseconds.</p></div>
-      <div class="card"><div class="ic">&#9851;</div><h3>Resume after a drop</h3><p>If the connection cuts out, restart with the same code and it picks up where it left off.</p></div>
-      <div class="card"><div class="ic">&#9881;</div><h3>You stay in control</h3><p>The receiver sees what&rsquo;s coming, picks where to save it, and nothing is written until they accept.</p></div>
+    <div class="hero-top">
+      <div>
+        <h1 class="rv s1">One file, two machines, <em>nothing</em> in between.</h1>
+        <p class="lede rv s2">NeoDrop opens a direct encrypted connection between two computers, wherever they are. A short code pairs the machines; the file goes straight across and never touches a server.</p>
+        <div class="hero-actions rv s3">
+          <a href="#download" class="btn primary lg">Download for Windows <span class="ar">↓</span></a>
+          <a href="#flow" class="btn lg">See how it works</a>
+        </div>
+        <p class="hero-meta rv s3">Open source, <b>MIT</b> licensed. Windows, macOS and Linux.</p>
+      </div>
+
+      <div class="readout rv s2" aria-hidden="true">
+        <div class="rhead"><span>Pairing</span><span class="mono">derived topic · scrypt</span></div>
+        <div class="endpoint a">
+          <span class="node">↑</span>
+          <span><span class="et">This machine generates</span><br><span class="ev mono" id="codeOut">TIGER-7342</span></span>
+        </div>
+        <div class="wire"><span class="rail"></span><span class="pkt"></span></div>
+        <div class="endpoint b">
+          <span class="node">↓</span>
+          <span><span class="et">The other machine enters</span><br><span class="ev mono"><span id="codeIn">TIGER-7342</span><span class="caret"></span></span></span>
+        </div>
+        <div class="rfoot">
+          <span class="chk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg> Noise</span>
+          <span class="chk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg> SHA-256</span>
+          <span class="chk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg> Single-use</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="trust rv">
+      <span class="ti">No account, no cloud</span>
+      <span class="ti"><span class="mono">~22→41</span> bits of entropy</span>
+      <span class="ti"><span class="mono">31</span> automated tests</span>
+      <span class="ti">Resume after a drop</span>
+      <span class="ti">Local-network discovery</span>
     </div>
   </div>
 </section>
 
-<section style="padding-top:0">
+<section class="block" id="flow">
   <div class="wrap">
-    <h2>How it works</h2>
-    <p class="sub">Three steps, both ways.</p>
-    <div class="steps">
-      <div class="step"><div class="n"></div><p><b>Send</b> &mdash; drop your files or a folder onto the app. You get a short pairing code (and a QR code).</p></div>
-      <div class="step"><div class="n"></div><p><b>Share the code</b> &mdash; the other person, anywhere, enters it. If it&rsquo;s on their clipboard it&rsquo;s filled in for them.</p></div>
-      <div class="step"><div class="n"></div><p><b>Receive</b> &mdash; they confirm, pick a folder, and the transfer runs with progress on both sides, then an integrity check.</p></div>
+    <div class="head rv">
+      <h2>From send to verify, in four steps</h2>
+      <p>No setup, no sign-up. The two peers find each other through the public Hyperswarm DHT, or directly on the local network, and talk with no relay.</p>
+    </div>
+    <div class="flow">
+      <div class="flow-track">
+        <div class="stepi rv s1">
+          <div class="pin">01</div>
+          <h3>Drop</h3>
+          <p>Drag files or a whole folder. A short code is generated, along with a QR code.</p>
+        </div>
+        <div class="stepi rv s1">
+          <div class="pin">02</div>
+          <h3>Share the code</h3>
+          <p>Pass the code to the other person. If it's already on their clipboard, it fills in.</p>
+        </div>
+        <div class="stepi rv s2">
+          <div class="pin">03</div>
+          <h3>Confirm</h3>
+          <p>The recipient confirms and picks the destination folder. Nothing is written before they agree.</p>
+        </div>
+        <div class="stepi rv s3">
+          <div class="pin">04</div>
+          <h3>Verify</h3>
+          <p>Progress on both sides, then an integrity check.</p>
+          <span class="tag"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg> SHA-256 verified</span>
+        </div>
+      </div>
     </div>
   </div>
 </section>
 
-<section class="secure">
+<section class="block" id="features" style="padding-top:0">
   <div class="wrap">
-    <h2>Built to be private</h2>
-    <p class="sub">Security is the default, not an option.</p>
-    <ul>
-      <li><b>No server</b> &mdash; peers find each other through a public distributed network and connect directly.</li>
-      <li><b>End-to-end encryption</b> (Noise protocol) on every connection, including on the local network.</li>
-      <li><b>The code never travels in clear</b> &mdash; a mutual challenge-response proves both sides know it, bound to the connection to defeat man-in-the-middle.</li>
-      <li><b>Optional passphrase and stronger codes</b> for sensitive transfers.</li>
-      <li><b>SHA-256 integrity check</b> &mdash; what arrives is exactly what was sent, or it&rsquo;s rejected.</li>
-    </ul>
+    <div class="head rv">
+      <h2>The shortest path between two disks</h2>
+      <p>NeoDrop looks for the two machines in parallel: over the internet via the DHT, and on the local network via mDNS. The first to answer wins.</p>
+    </div>
+
+    <div class="net">
+      <div class="rv">
+        <h3>Two paths, one encryption</h3>
+        <p>Whether the connection goes over the internet or the local network, the same Noise protocol encrypts the socket. End-to-end confidentiality doesn't depend on the path.</p>
+        <div class="pts">
+          <div class="pt"><span class="d"></span><span><b>Hyperswarm DHT.</b> Global discovery, with UDP hole punching to cross NATs. An encrypted relay takes over if hole punching fails.</span></div>
+          <div class="pt lan"><span class="d"></span><span><b>Local mDNS.</b> On the same network, peers find each other in milliseconds, and it works even without internet.</span></div>
+        </div>
+      </div>
+
+      <div class="schema rv s1">
+        <svg viewBox="0 0 460 280" role="img" aria-label="Diagram: two computers linked by the Hyperswarm DHT and by the local network">
+          <defs>
+            <marker id="dot" markerWidth="6" markerHeight="6" refX="3" refY="3"><circle cx="3" cy="3" r="2.4" fill="#2563eb"/></marker>
+          </defs>
+          <g>
+            <rect x="150" y="14" width="160" height="46" rx="23" fill="#eaf0ff" stroke="#c4d6fb"/>
+            <text x="230" y="42" text-anchor="middle" font-family="Geist Mono, monospace" font-size="13" fill="#2563eb">Hyperswarm DHT</text>
+          </g>
+          <g>
+            <rect x="26" y="150" width="120" height="84" rx="12" fill="#ffffff" stroke="#d6dae1"/>
+            <rect x="42" y="166" width="88" height="44" rx="5" fill="#f5f6f8" stroke="#e4e7ec"/>
+            <text x="86" y="226" text-anchor="middle" font-family="Geist, sans-serif" font-size="12.5" fill="#414956">Sender</text>
+            <text x="86" y="193" text-anchor="middle" font-family="Geist Mono, monospace" font-size="15" fill="#2563eb">↑</text>
+          </g>
+          <g>
+            <rect x="314" y="150" width="120" height="84" rx="12" fill="#ffffff" stroke="#d6dae1"/>
+            <rect x="330" y="166" width="88" height="44" rx="5" fill="#f5f6f8" stroke="#e4e7ec"/>
+            <text x="374" y="226" text-anchor="middle" font-family="Geist, sans-serif" font-size="12.5" fill="#414956">Recipient</text>
+            <text x="374" y="193" text-anchor="middle" font-family="Geist Mono, monospace" font-size="15" fill="#15803d">↓</text>
+          </g>
+          <path d="M86 150 C 86 95, 150 50, 178 44" fill="none" stroke="#c4d6fb" stroke-width="2" stroke-dasharray="5 6"/>
+          <path d="M374 150 C 374 95, 310 50, 282 44" fill="none" stroke="#c4d6fb" stroke-width="2" stroke-dasharray="5 6"/>
+          <line x1="146" y1="192" x2="314" y2="192" stroke="#bfe3cc" stroke-width="2.5" marker-end="url(#dot)"/>
+          <circle id="schemaPkt" cx="146" cy="192" r="4.5" fill="#15803d"/>
+          <text x="230" y="182" text-anchor="middle" font-family="Geist Mono, monospace" font-size="11.5" fill="#15803d">local network</text>
+        </svg>
+      </div>
+    </div>
+
+    <div class="specs">
+      <div class="spec rv">
+        <h3>Files and folders</h3>
+        <p>A folder's whole tree is recreated exactly on the recipient side, with a preview for images.</p>
+        <span class="mark">recursive</span>
+      </div>
+      <div class="spec rv">
+        <h3>Resume after a drop</h3>
+        <p>If the connection drops, restarting with the same code resumes where it left off instead of resending everything.</p>
+        <span class="mark">.part cache</span>
+      </div>
+      <div class="spec rv">
+        <h3>On-the-fly compression</h3>
+        <p>Compressible formats go through brotli during transport, then are decompressed on arrival. The SHA-256 covers the original.</p>
+        <span class="mark">brotli</span>
+      </div>
+      <div class="spec rv">
+        <h3>Stronger codes and passphrase</h3>
+        <p>One word is enough, two or three for sensitive transfers. An optional passphrase is folded into the key derivation.</p>
+        <span class="mark">1–3 words</span>
+      </div>
+      <div class="spec rv">
+        <h3>QR code, notifications, history</h3>
+        <p>The code shows as a QR for another device. A notification flags each step, and recent transfers stay viewable.</p>
+        <span class="mark">tray</span>
+      </div>
+      <div class="spec rv">
+        <h3>Speed limit</h3>
+        <p>Cap the send rate in MB/s so you don't saturate a shared connection.</p>
+        <span class="mark">MB/s</span>
+      </div>
+    </div>
   </div>
 </section>
 
-<section id="download">
+<section class="crypt" id="security">
   <div class="wrap">
-    <h2>Get it</h2>
-    <p class="sub">Windows, macOS and Linux builds are published on GitHub Releases.</p>
-    <p style="text-align:center;margin-bottom:24px">
-      <a class="btn primary" style="background:var(--accent);color:#fff" href="https://github.com/justn2o/p2neo/releases">Download from Releases</a>
-    </p>
-    <p class="sub" style="margin-bottom:14px">Or run it from source:</p>
-    <pre>git clone https://github.com/justn2o/p2neo.git
-cd p2neo
-npm install
-npm start
-
-# command line
-node bin/cli.js</pre>
+    <div class="head rv">
+      <h2>The code never travels in clear</h2>
+      <p>Confidentiality is in the structure of the protocol, not a checkbox. Here's what protects a transfer, primitive by primitive.</p>
+    </div>
+    <div class="crypt-list">
+      <div class="crow rv">
+        <span class="key">noise · hyperswarm</span>
+        <div><h3>End-to-end encryption</h3><p>Sockets are encrypted natively by the Noise protocol, local network included. No middleman reads the content.</p></div>
+      </div>
+      <div class="crow rv">
+        <span class="key">scrypt → hkdf</span>
+        <div><h3>Unguessable DHT topic</h3><p>The topic is derived from the code with scrypt, costly by design, then HKDF. Watching the DHT isn't enough to brute-force it.</p></div>
+      </div>
+      <div class="crow rv">
+        <span class="key">hmac-sha256</span>
+        <div><h3>Mutual challenge-response</h3><p>Each peer proves it knows the code via an HMAC over random nonces, with reflection protection. The code itself never travels.</p></div>
+      </div>
+      <div class="crow rv">
+        <span class="key">3 tries · 15 min</span>
+        <div><h3>Single-use code</h3><p>Three failed attempts invalidate the code on the sender side, and it expires anyway after fifteen minutes with no connection.</p></div>
+      </div>
+      <div class="crow rv">
+        <span class="key">passphrase</span>
+        <div><h3>Secret on top of the code</h3><p>Folded into the topic and the auth key, a passphrase makes pairing impossible even if the code is intercepted.</p></div>
+      </div>
+      <div class="crow rv">
+        <span class="key">sandbox · contextIsolation</span>
+        <div><h3>Isolated interface</h3><p>The Electron renderer is sandboxed; all network and file logic lives in the main process. Received names are sanitized before writing.</p></div>
+      </div>
+    </div>
   </div>
 </section>
+
+<section class="block" id="cli">
+  <div class="wrap cli">
+    <div class="rv">
+      <h2>The same thing, with no UI</h2>
+      <p>Scriptable and automatable, with identical encryption guarantees. Installed globally, the command is <span class="mono" style="color:var(--accent)">neodrop</span>.</p>
+      <div class="flags">
+        <span class="flag">--strength high|max</span>
+        <span class="flag">--pass PHRASE</span>
+        <span class="flag">--limit MB/s</span>
+        <span class="flag">--out DIR</span>
+        <span class="flag">--yes</span>
+      </div>
+    </div>
+    <div class="term rv s1">
+      <div class="term-bar"><i></i><i></i><i></i><span>neodrop</span></div>
+      <div class="term-body">
+        <div><span class="cm"># send a folder, stronger code and passphrase</span></div>
+        <div><span class="pr">$</span> neodrop send <span class="fl">photos/</span> --strength high --pass <span class="fl">"holiday"</span></div>
+        <div style="margin:4px 0"><span class="cm">→ pairing code</span> <span class="code">FALCON-2914</span></div>
+        <div><span class="cm">→ waiting for the recipient</span></div>
+        <div style="margin-top:12px"><span class="cm"># on the other machine</span></div>
+        <div><span class="pr">$</span> neodrop receive <span class="code">FALCON-2914</span> --out <span class="fl">./received</span> --yes</div>
+        <div style="margin-top:4px"><span class="ok">✓</span> 248 files · 1.4 GB · SHA-256 verified</div>
+        <div><span class="pr">$</span> <span class="tcur"></span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="block" id="download" style="padding-top:0">
+  <div class="wrap">
+    <div class="head rv">
+      <h2>Install NeoDrop</h2>
+      <p>A standalone app: nothing else to install. Launch it on both sides, and transfer.</p>
+    </div>
+    <div class="dl">
+      <div class="drow rv">
+        <span class="os">Windows</span>
+        <span class="fmt">NSIS installer · .exe · x64</span>
+        <a href="https://github.com/justn2o/neodrop/releases/latest" class="btn primary">Download</a>
+      </div>
+      <div class="drow rv">
+        <span class="os">macOS</span>
+        <span class="fmt">Disk image · .dmg · Intel and Apple Silicon</span>
+        <a href="https://github.com/justn2o/neodrop/releases/latest" class="btn">Download</a>
+      </div>
+      <div class="drow rv">
+        <span class="os">Linux</span>
+        <span class="fmt">AppImage · x64</span>
+        <a href="https://github.com/justn2o/neodrop/releases/latest" class="btn">Download</a>
+      </div>
+    </div>
+    <p style="margin-top:24px;color:var(--muted);font-size:14px">The DHT needs internet access (UDP). Local discovery also works offline, between peers on the same network.</p>
+  </div>
+</section>
+
+<section class="final">
+  <div class="wrap">
+    <span class="glyph rv">⇄</span>
+    <h2 class="rv s1">One code is all it takes.</h2>
+    <p class="rv s1">No account to create, no cloud between your two machines.</p>
+    <div class="hero-actions rv s2">
+      <a href="#download" class="btn primary lg">Download NeoDrop <span class="ar">→</span></a>
+    </div>
+  </div>
+</section>
+
+</main>
 
 <footer>
-  <p>NeoDrop &mdash; open source on <a href="https://github.com/justn2o/p2neo">GitHub</a>. MIT licensed.</p>
+  <div class="wrap foot-in">
+    <div>
+      <div class="foot-brand"><span class="glyph">⇄</span> NeoDrop</div>
+      <div class="foot-tags">
+        <span class="tag-m">peer-to-peer</span>
+        <span class="tag-m">no server</span>
+        <span class="tag-m">MIT licensed</span>
+      </div>
+    </div>
+    <nav class="foot-links" aria-label="Footer links">
+      <a href="#flow">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#security">Security</a>
+      <a href="#cli">Command line</a>
+      <a href="#download">Download</a>
+    </nav>
+  </div>
+  <div class="wrap" style="margin-top:30px"><p style="color:var(--faint);font-size:13px">© 2026 NeoDrop. End-to-end encrypted file transfer, no middleman.</p></div>
 </footer>
 
+<script>
+const nav=document.getElementById('nav');
+const onScroll=()=>nav.classList.toggle('scrolled',scrollY>6);
+onScroll();addEventListener('scroll',onScroll,{passive:true});
+
+const reduce=matchMedia('(prefers-reduced-motion:reduce)').matches;
+if(!reduce){
+  const io=new IntersectionObserver((es)=>{
+    es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});
+  },{threshold:.14,rootMargin:'0px 0px -7% 0px'});
+  document.querySelectorAll('.rv').forEach(el=>io.observe(el));
+
+  const sp=document.getElementById('schemaPkt');
+  if(sp){
+    let t=0;const animate=()=>{t=(t+0.012)%1;const x=146+(168*t);sp.setAttribute('cx',x);sp.setAttribute('fill',t<.5?'#2563eb':'#15803d');requestAnimationFrame(animate);};
+    requestAnimationFrame(animate);
+  }
+
+  const words=['TIGER','FALCON','FOX','LYNX','ORCA','HERON','BEAVER','PUMA','EAGLE','OTTER'];
+  const out=document.getElementById('codeOut'),inp=document.getElementById('codeIn');
+  let i=0;
+  const cycle=()=>{
+    const w=words[i%words.length],n=String(1000+((i*1373)%9000)),code=w+'-'+n;
+    out.style.transition='opacity .3s';out.style.opacity='0';
+    setTimeout(()=>{out.textContent=code;out.style.opacity='1';},170);
+    inp.textContent='';let k=0;
+    const type=()=>{if(k<=code.length){inp.textContent=code.slice(0,k);k++;setTimeout(type,55);}};
+    setTimeout(type,500);i++;
+  };
+  cycle();setInterval(cycle,4400);
+}
+</script>
 </body>
 </html>
