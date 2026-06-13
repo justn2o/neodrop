@@ -598,11 +598,15 @@ test('transfert : reprise après coupure via le cache de reprise', async () => {
 
   // 1re tentative : on coupe la connexion en plein transfert (compression
   // désactivée pour que l'offset sur disque corresponde simplement aux octets).
+  // Coupure déterministe au 40e chunk (≈ 2,5 Mo sur 24) : ne dépend pas de la
+  // vitesse de la boucle locale, qui peut sinon terminer avant la coupure.
   {
-    const { sender, receiver, socketA } = await makePair([src], { destDir, resumeDir, compression: false })
+    const { sender, receiver, framesA, socketA } = await makePair([src], { destDir, resumeDir, compression: false })
     const errR = once(receiver, 'error')
     const errS = once(sender, 'error')
-    receiver.on('progress', (p) => { if (p.totalBytes > 4 * 1024 * 1024) socketA.destroy() })
+    let n = 0
+    const origSend = framesA.sendChunk.bind(framesA)
+    framesA.sendChunk = (buf) => { if (++n === 40) socketA.destroy(); return origSend(buf) }
     sender.start()
     await Promise.all([errR, errS])
     await new Promise((r) => setTimeout(r, 150))

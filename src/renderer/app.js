@@ -19,14 +19,27 @@ function renderFileList (container, files) {
   for (const f of files) {
     const row = document.createElement('div')
     row.className = 'file-row'
+
+    const wrap = document.createElement('div')
+    wrap.className = 'name-wrap'
+    // Miniature d'aperçu si disponible (images).
+    if (f.thumb) {
+      const img = document.createElement('img')
+      img.className = 'thumb'
+      img.src = f.thumb
+      img.alt = ''
+      wrap.appendChild(img)
+    }
     const name = document.createElement('span')
     name.className = 'name'
     // Pour un dossier, on montre le chemin relatif (arborescence) si dispo.
     name.textContent = f.relPath || f.name
+    wrap.appendChild(name)
+
     const size = document.createElement('span')
     size.className = 'size'
     size.textContent = formatBytes(f.size)
-    row.append(name, size)
+    row.append(wrap, size)
     container.appendChild(row)
   }
 }
@@ -80,10 +93,13 @@ function goHome () {
   resetState()
   // Réinitialise les éléments transitoires.
   $('code-input').value = ''
+  $('recv-pass').value = ''
   $('receive-status').classList.add('hidden')
   $('btn-cancel-receive').classList.add('hidden')
   $('btn-connect').disabled = false
   $('conn-badge').classList.add('hidden')
+  $('qr-code').classList.add('hidden')
+  $('pass-reminder').classList.add('hidden')
   $('progress-fill').style.width = '0%'
   showScreen('screen-home')
 }
@@ -91,11 +107,21 @@ function goHome () {
 /* ------------------------- navigation ----------------------------- */
 
 $('btn-go-send').addEventListener('click', () => { role = 'sender'; showScreen('screen-send') })
-$('btn-go-receive').addEventListener('click', () => {
+$('btn-go-receive').addEventListener('click', async () => {
   role = 'receiver'
   showScreen('screen-receive')
+  // Pré-remplit le code si le presse-papier en contient un (#7).
+  if (!$('code-input').value) {
+    try {
+      const text = await window.api.readClipboard()
+      if (text && /^[A-Za-z]{2,12}([ -][A-Za-z]{2,12}){0,2}[ -]?\d{4}$/.test(text.trim())) {
+        $('code-input').value = text.trim()
+      }
+    } catch {}
+  }
   $('code-input').focus()
 })
+$('btn-go-history').addEventListener('click', showHistory)
 document.querySelectorAll('[data-back]').forEach((b) => b.addEventListener('click', goHome))
 $('btn-done-home').addEventListener('click', goHome)
 $('btn-error-home').addEventListener('click', goHome)
@@ -107,6 +133,48 @@ function showError (message) {
   $('error-text').textContent = message
   showScreen('screen-error')
 }
+
+/* ------------------------- historique ----------------------------- */
+
+function formatDate (ts) {
+  try {
+    return new Date(ts).toLocaleString('fr-FR',
+      { dateStyle: 'short', timeStyle: 'short' })
+  } catch { return '' }
+}
+
+async function showHistory () {
+  const list = await window.api.getHistory().catch(() => [])
+  const container = $('history-list')
+  container.innerHTML = ''
+  $('history-empty').classList.toggle('hidden', list.length > 0)
+  for (const h of list) {
+    const item = document.createElement('div')
+    item.className = 'history-item'
+    const dir = h.direction === 'send' ? 'Envoyé' : 'Reçu'
+    const names = (h.names || []).join(', ') + (h.count > (h.names || []).length ? '…' : '')
+    const top = document.createElement('div')
+    top.className = 'h-top'
+    const d = document.createElement('span')
+    d.className = `h-dir ${h.direction}`
+    d.textContent = `${h.direction === 'send' ? '↑' : '↓'} ${dir} · ${h.count} fichier(s) · ${formatBytes(h.totalSize)}`
+    const when = document.createElement('span')
+    when.className = 'h-when'
+    when.textContent = formatDate(h.at)
+    top.append(d, when)
+    const files = document.createElement('div')
+    files.className = 'h-files'
+    files.textContent = names
+    item.append(top, files)
+    container.appendChild(item)
+  }
+  showScreen('screen-history')
+}
+
+$('btn-clear-history').addEventListener('click', async () => {
+  await window.api.clearHistory().catch(() => {})
+  showHistory()
+})
 
 /* --------------------------- envoi -------------------------------- */
 
@@ -141,16 +209,30 @@ async function browseFolderAndSend () {
   if (paths.length > 0) startSending(paths)
 }
 
+function readSendOptions () {
+  const limit = Number($('opt-limit').value)
+  return {
+    strength: $('opt-strength').value || 'normal',
+    passphrase: $('opt-pass').value || '',
+    compression: $('opt-compress').checked,
+    rateLimit: Number.isFinite(limit) && limit > 0 ? Math.round(limit * 1024 * 1024) : 0
+  }
+}
+
 async function startSending (paths) {
   role = 'sender'
   // Préparation des fichiers/dossiers (calcul des hash, arborescence) :
   // sur un gros dossier cela peut prendre un instant.
   $('wait-status').textContent = 'Préparation…'
-  const res = await window.api.startSend(paths)
+  const res = await window.api.startSend(paths, readSendOptions())
   if (res.error) return showError(res.error)
 
   $('pairing-code').textContent = res.code
   $('wait-status').textContent = 'En attente du destinataire…'
+  // QR code (scan rapide depuis un téléphone).
+  const qr = $('qr-code')
+  if (res.qr) { qr.src = res.qr; qr.classList.remove('hidden') } else { qr.classList.add('hidden') }
+  $('pass-reminder').classList.toggle('hidden', !res.passphrase)
   renderFileList($('wait-files'), res.files || [])
   if (res.folder) {
     const n = (res.files || []).length
@@ -201,7 +283,7 @@ async function connect () {
   $('btn-cancel-receive').classList.remove('hidden')
   $('receive-status-text').textContent = "Recherche de l'expéditeur…"
 
-  const res = await window.api.startReceive(code)
+  const res = await window.api.startReceive(code, { passphrase: $('recv-pass').value || '' })
   if (res.error) {
     $('btn-connect').disabled = false
     $('receive-status').classList.add('hidden')

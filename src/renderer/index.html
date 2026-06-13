@@ -28,6 +28,7 @@
         <span class="big-btn-sub">Saisir le code reçu</span>
       </button>
     </div>
+    <button id="btn-go-history" class="btn small-btn ghost-btn">Historique des transferts</button>
   </section>
 
   <!-- Envoyer : choix des fichiers -->
@@ -45,6 +46,30 @@
         <button id="btn-browse-folder" class="btn">Dossier…</button>
       </div>
     </div>
+
+    <details id="send-options" class="options">
+      <summary>Options</summary>
+      <div class="option-row">
+        <label class="field-label" for="opt-strength">Robustesse du code</label>
+        <select id="opt-strength" class="select">
+          <option value="normal">Normal (1 mot)</option>
+          <option value="high">Renforcé (2 mots)</option>
+          <option value="max">Maximal (3 mots)</option>
+        </select>
+      </div>
+      <div class="option-row">
+        <label class="field-label" for="opt-pass">Passphrase (optionnelle)</label>
+        <input id="opt-pass" class="text-input" type="password" autocomplete="off"
+               placeholder="Exigée en plus du code">
+      </div>
+      <div class="option-row">
+        <label class="field-label" for="opt-limit">Limite de débit (Mo/s, 0 = illimité)</label>
+        <input id="opt-limit" class="text-input" type="number" min="0" step="1" value="0">
+      </div>
+      <label class="check-row"><input id="opt-compress" type="checkbox" checked>
+        Compresser les fichiers compressibles (texte, etc.)</label>
+    </details>
+
     <p class="hint">Un code d'appairage sera généré dès la sélection.</p>
   </section>
 
@@ -55,7 +80,9 @@
     </header>
     <div class="code-box">
       <div id="pairing-code" class="pairing-code">·····</div>
+      <img id="qr-code" class="qr-code hidden" alt="QR code du code d'appairage" width="180" height="180">
       <button id="btn-copy" class="btn">Copier</button>
+      <p id="pass-reminder" class="muted small hidden">🔒 Une passphrase est requise pour ce transfert.</p>
       <p id="code-expiry" class="muted small"></p>
     </div>
     <div id="wait-files" class="file-summary"></div>
@@ -75,7 +102,10 @@
     </header>
     <label class="field-label" for="code-input">Code d'appairage</label>
     <input id="code-input" class="code-input" type="text" placeholder="TIGRE-7342"
-           autocomplete="off" spellcheck="false" maxlength="20">
+           autocomplete="off" spellcheck="false" maxlength="40">
+    <label class="field-label" for="recv-pass">Passphrase (si l'expéditeur en a défini une)</label>
+    <input id="recv-pass" class="text-input" type="password" autocomplete="off"
+           placeholder="Laisser vide si aucune">
     <button id="btn-connect" class="btn primary full">Se connecter</button>
     <div id="receive-status" class="status-line hidden">
       <span class="spinner"></span>
@@ -144,6 +174,17 @@
     <h2>Oups</h2>
     <p id="error-text" class="error-text"></p>
     <button id="btn-error-home" class="btn primary full">Retour à l'accueil</button>
+  </section>
+
+  <!-- Historique -->
+  <section id="screen-history" class="screen">
+    <header class="screen-header">
+      <button class="back-btn" data-back>←</button>
+      <h2>Historique</h2>
+    </header>
+    <div id="history-list" class="history-list"></div>
+    <p id="history-empty" class="hint hidden">Aucun transfert pour le moment.</p>
+    <button id="btn-clear-history" class="btn danger-outline">Effacer l'historique</button>
   </section>
 
   <script src="app.js"></script>
