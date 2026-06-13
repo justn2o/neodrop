@@ -76,10 +76,14 @@ function progressBar (p) {
   process.stdout.write(line)
 }
 
+// Interface readline UNIQUE et réutilisée : recréer une interface par question
+// fait perdre les lignes déjà en tampon (saisie collée / redirigée).
+let _rl = null
 function ask (question) {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-  return new Promise((resolve) => rl.question(question, (a) => { rl.close(); resolve(a) }))
+  if (!_rl) _rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  return new Promise((resolve) => _rl.question(question, resolve))
 }
+function closePrompts () { if (_rl) { _rl.close(); _rl = null } }
 
 function resumeDir () {
   return path.join(os.homedir(), '.neodrop', 'partials')
@@ -176,10 +180,49 @@ function usage () {
   console.log(`NeoDrop CLI — transfert de fichiers P2P chiffré
 
 Usage :
+  neodrop                              menu interactif (Envoyer / Recevoir)
   neodrop send <fichier|dossier>...  [--pass PHRASE] [--strength high|max]
                                      [--no-compress] [--limit Mo/s]
   neodrop receive <CODE> [--out DOSSIER] [--pass PHRASE] [--yes]
 `)
+}
+
+/** Nettoie un chemin saisi/collé : retire les guillemets éventuels. */
+function cleanPath (s) {
+  return String(s).trim().replace(/^["']+|["']+$/g, '').trim()
+}
+
+/** Menu interactif lancé quand « neodrop » est appelé sans argument. */
+async function interactive () {
+  console.log('\n  ⇄  NeoDrop — transfert de fichiers P2P chiffré\n')
+  const choice = (await ask('  [1] Envoyer    [2] Recevoir    [q] Quitter\n  > ')).trim().toLowerCase()
+
+  if (['1', 'e', 'envoyer'].includes(choice)) {
+    let p = ''
+    while (!p) p = cleanPath(await ask('\n  Fichier ou dossier à envoyer : '))
+    const strong = (await ask('  Code renforcé (2 mots) ? [o/N] : ')).trim().toLowerCase()
+    const pass = (await ask('  Passphrase (Entrée = aucune) : ')).trim()
+    const flags = {}
+    if (['o', 'oui', 'y'].includes(strong)) flags.strength = 'high'
+    if (pass) flags.pass = pass
+    closePrompts()
+    console.log('')
+    await doSend([p], flags)
+  } else if (['2', 'r', 'recevoir'].includes(choice)) {
+    let code = ''
+    while (!code) code = (await ask('\n  Code reçu (ex. TIGRE-7342) : ')).trim()
+    const pass = (await ask('  Passphrase (Entrée = aucune) : ')).trim()
+    const out = cleanPath(await ask('  Dossier de destination (Entrée = dossier courant) : ')) || process.cwd()
+    // L'utilisateur a explicitement choisi de recevoir et saisi le code :
+    // on accepte sans reposer la question (et on libère la saisie).
+    const flags = { out, yes: true }
+    if (pass) flags.pass = pass
+    closePrompts()
+    console.log('')
+    await doReceive(code, flags)
+  } else {
+    process.exit(0)
+  }
 }
 
 async function main () {
@@ -192,8 +235,12 @@ async function main () {
     } else if (cmd === 'receive') {
       if (positional.length === 0) { usage(); process.exit(2) }
       await doReceive(positional[0], flags)
+    } else if (cmd === '-h' || cmd === '--help' || cmd === 'help') {
+      usage(); process.exit(0)
+    } else if (!cmd) {
+      await interactive() // « neodrop » seul → menu interactif
     } else {
-      usage(); process.exit(cmd ? 2 : 0)
+      usage(); process.exit(2)
     }
   } catch (err) {
     console.error('Erreur :', err.message)
