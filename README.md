@@ -12,6 +12,8 @@ the pairing code, optional **stronger codes** and **passphrase**, system
 **notifications**, a **tray icon**, **history**, image **thumbnails**, a
 **speed limit**, and a **command-line mode**.
 
+Thanks to Claude Code for the debugging, advice, those really tough matches, and code comments 🫰
+
 ## How it works
 
 1. **Send**: drop one or more files — **or a whole folder** — onto the app (or
@@ -198,3 +200,4 @@ on a `v*` tag, publishes a Release with the three artifacts attached.
   fails with a timeout.
 - On **first launch on Windows**, allow the app through the Windows Firewall when
   prompted (needed for incoming connections and local discovery).
+`This app was developed with the help of Claude Code. As a result, it may contain bugs, inconsistencies, and missing features. I am not a professional developer, and I admit that I am not one.`
