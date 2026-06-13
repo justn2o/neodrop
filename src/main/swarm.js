@@ -11,12 +11,20 @@
  *
  *   A → B : HELLO { nonce_A, role_A }
  *   B → A : HELLO { nonce_B, role_B }
- *   A → B : AUTH  { mac = HMAC-SHA256(authKey, nonce_B || role_A) }
- *   B → A : AUTH  { mac = HMAC-SHA256(authKey, nonce_A || role_B) }
+ *   A → B : AUTH  { mac = HMAC-SHA256(authKey, cb || nonce_B || role_A) }
+ *   B → A : AUTH  { mac = HMAC-SHA256(authKey, cb || nonce_A || role_B) }
  *   les deux : AUTH_OK si la preuve reçue est valide, sinon déconnexion.
  *
  * Le rôle (sender/receiver) est inclus dans le HMAC pour empêcher une
  * attaque par réflexion (renvoyer la preuve de l'autre pair).
+ *
+ * « cb » est la LIAISON DE CANAL : le handshakeHash du canal Noise sous-jacent
+ * (identique aux deux bouts d'une même session, différent sur chaque jambe d'un
+ * relais). En l'incluant dans le HMAC, un attaquant qui s'interposerait (relais
+ * sur la DHT ou sur le LAN) ne peut plus se contenter de RELAYER les preuves :
+ * la preuve de A est liée au canal A↔relais, invalide sur le canal relais↔B.
+ * Si la socket n'expose pas de handshakeHash (sockets TCP nues des tests), cb
+ * vaut une chaîne vide aux deux bouts — la logique reste vérifiable.
  *
  * Côté expéditeur : 3 échecs d'authentification invalident le code.
  * Le code expire après 15 minutes sans transfert (usage unique).
@@ -39,6 +47,18 @@ const MAX_AUTH_FAILURES = 3 // côté expéditeur : 3 échecs → code invalidé
  * connaissance du code via HMAC(authKey, nonce_du_pair || son_rôle), sans
  * jamais transmettre le code. Résout true si le pair est authentifié.
  */
+/**
+ * Liaison de canal : le handshakeHash du canal Noise sous-jacent, identique
+ * aux deux extrémités d'une même session. Vide si la socket n'en expose pas
+ * (sockets TCP nues des tests) — les deux bouts utilisent alors la même valeur
+ * vide, ce qui reste cohérent.
+ */
+function channelBinding (frames) {
+  const s = frames && frames.socket
+  const hh = s && (s.handshakeHash || (s.rawStream && s.rawStream.handshakeHash))
+  return b4a.isBuffer(hh) ? hh : b4a.alloc(0)
+}
+
 function authenticate (frames, { authKey, role, timeout = AUTH_TIMEOUT_MS }) {
   const myNonce = crypto.randomBytes(16)
   const peerRole = role === 'sender' ? 'receiver' : 'sender'
@@ -66,18 +86,21 @@ function authenticate (frames, { authKey, role, timeout = AUTH_TIMEOUT_MS }) {
 
     const onJson = (msg) => {
       try {
+        // Liaison de canal : capturée à réception (le handshake Noise est alors
+        // terminé, les données ne circulant qu'après). Identique aux deux bouts.
+        const cb = channelBinding(frames)
         if (msg.t === 'HELLO') {
           // Le rôle du pair doit être l'opposé du nôtre (anti-réflexion).
           if (peerNonce || msg.role !== peerRole) return settle(false)
           peerNonce = b4a.from(String(msg.nonce), 'hex')
           if (peerNonce.length !== 16) return settle(false)
           const mac = crypto.createHmac('sha256', authKey)
-            .update(peerNonce).update(role).digest('hex')
+            .update(cb).update(peerNonce).update(role).digest('hex')
           frames.sendJson({ t: 'AUTH', mac })
         } else if (msg.t === 'AUTH') {
           if (!peerNonce || peerProofOk) return settle(false)
           const expected = crypto.createHmac('sha256', authKey)
-            .update(myNonce).update(peerRole).digest()
+            .update(cb).update(myNonce).update(peerRole).digest()
           const received = b4a.from(String(msg.mac), 'hex')
           if (received.length !== expected.length ||
               !crypto.timingSafeEqual(received, expected)) {
@@ -283,4 +306,4 @@ function describeConnection (socket, info) {
   return null
 }
 
-module.exports = { SwarmSession, authenticate, CODE_TTL_MS, JOIN_TIMEOUT_MS, MAX_AUTH_FAILURES }
+module.exports = { SwarmSession, authenticate, channelBinding, CODE_TTL_MS, JOIN_TIMEOUT_MS, MAX_AUTH_FAILURES }

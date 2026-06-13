@@ -261,6 +261,36 @@ test('swarm.js : la réflexion du HELLO/rôle identique est rejetée', async () 
   a.destroy(); b.destroy()
 })
 
+test('swarm.js : liaison de canal — handshakeHash identique OK, divergent rejeté', async () => {
+  const { authKey } = await deriveSecrets('LOUP-1234')
+  // Session Noise légitime : même handshakeHash aux deux bouts → authentifié.
+  {
+    const [a, b] = await makeSocketPair()
+    const hh = crypto.randomBytes(32)
+    a.handshakeHash = hh; b.handshakeHash = hh
+    const [okA, okB] = await Promise.all([
+      authenticate(new FrameStream(a), { authKey, role: 'sender', timeout: 3000 }),
+      authenticate(new FrameStream(b), { authKey, role: 'receiver', timeout: 3000 })
+    ])
+    assert.ok(okA && okB, 'handshakeHash identique → authentifié')
+    a.destroy(); b.destroy()
+  }
+  // Relais/MITM : chaque bout voit un handshakeHash différent (deux jambes
+  // Noise distinctes) → la preuve relayée ne vérifie pas, rejet des deux côtés.
+  {
+    const [a, b] = await makeSocketPair()
+    a.handshakeHash = crypto.randomBytes(32)
+    b.handshakeHash = crypto.randomBytes(32)
+    const [okA, okB] = await Promise.all([
+      authenticate(new FrameStream(a), { authKey, role: 'sender', timeout: 3000 }),
+      authenticate(new FrameStream(b), { authKey, role: 'receiver', timeout: 3000 })
+    ])
+    assert.strictEqual(okA, false, 'handshakeHash divergent → rejet (expéditeur)')
+    assert.strictEqual(okB, false, 'handshakeHash divergent → rejet (destinataire)')
+    a.destroy(); b.destroy()
+  }
+})
+
 /* ------------------------ transfert de bout en bout --------------- */
 
 test('transfert : multi-fichiers complet avec vérification du hash', async () => {
