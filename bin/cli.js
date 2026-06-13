@@ -162,7 +162,9 @@ async function doReceive (rawCode, flags) {
     receiver.on('done', ({ files }) => {
       let out = '\nReçu, intégrité vérifiée :\n'
       for (const f of files) out += `  • ${f.relPath || f.name}\n`
-      finish(0, out)
+      // Petit délai avant de fermer : laisse le DONE_ACK parvenir à
+      // l'expéditeur (sinon il signale une coupure au lieu d'un succès).
+      setTimeout(() => finish(0, out), 1200)
     })
   })
 

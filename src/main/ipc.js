@@ -334,7 +334,10 @@ async function startReceive (win, rawCode, opts = {}) {
       })
       notify(win, 'NeoDrop', `Fichiers reçus (${files.length}). Intégrité vérifiée.`)
       emitToRenderer(win, 'done', { files })
-      teardownSession()
+      // Le DONE_ACK vient d'être envoyé : on laisse l'expéditeur le recevoir
+      // et fermer en douceur avant de démonter la session, sinon il verrait
+      // une coupure au lieu d'un succès.
+      setTimeout(() => teardownSession(), 1500)
     })
     receiver.on('cancelled', ({ by, rejected }) => {
       emitToRenderer(win, 'cancelled', { by, rejected })
