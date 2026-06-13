@@ -41,6 +41,9 @@ const CODE_TTL_MS = 15 * 60 * 1000 // expiration du code : 15 minutes
 const JOIN_TIMEOUT_MS = 30 * 1000 // côté destinataire : 30 s pour trouver le pair
 const AUTH_TIMEOUT_MS = 15 * 1000 // délai max pour le challenge-réponse
 const MAX_AUTH_FAILURES = 3 // côté expéditeur : 3 échecs → code invalidé
+// Fenêtre de collecte des connexions authentifiées concurrentes (LAN + DHT)
+// avant de retenir, de façon déterministe, la même des deux côtés.
+const SELECT_WINDOW_MS = 400
 
 /**
  * Challenge-réponse mutuel sur une FrameStream : chaque pair prouve la
@@ -161,6 +164,9 @@ class SwarmSession extends EventEmitter {
     this._lan = null
     this._timers = []
     this._pendingSockets = new Set()
+    this._candidates = [] // connexions authentifiées en attente de sélection
+    this._selectTimer = null
+    this._selected = false
   }
 
   async start () {
@@ -249,16 +255,53 @@ class SwarmSession extends EventEmitter {
       return
     }
 
-    if (this.frames) {
-      frames.destroy() // un autre pair a gagné la course
+    if (this._selected) {
+      frames.destroy() // sélection déjà faite : connexion surnuméraire
       return
     }
+    this._addCandidate(frames, socket, info)
+  }
 
-    this.frames = frames
+  /**
+   * Plusieurs canaux peuvent s'authentifier en parallèle entre les MÊMES deux
+   * pairs : la connexion DHT et jusqu'à deux connexions LAN croisées. Si chaque
+   * pair gardait « le premier arrivé », les deux pourraient retenir des
+   * connexions DIFFÉRENTES et se couper mutuellement (« connexion perdue » des
+   * deux côtés). On collecte donc les candidats pendant une courte fenêtre,
+   * puis on retient de façon DÉTERMINISTE : le handshakeHash du canal Noise est
+   * identique aux deux bouts d'une même connexion, donc min(handshakeHash)
+   * désigne la même connexion chez les deux pairs.
+   */
+  _addCandidate (frames, socket, info) {
+    if (this.closed) { frames.destroy(); return }
+    this._candidates.push({ frames, socket, info, hh: channelBinding(frames) })
+    frames.on('close', () => this._dropCandidate(frames))
+    if (!this._selectTimer) {
+      this._selectTimer = setTimeout(() => this._select(), SELECT_WINDOW_MS)
+    }
+  }
+
+  _dropCandidate (frames) {
+    const i = this._candidates.findIndex((c) => c.frames === frames)
+    if (i !== -1) this._candidates.splice(i, 1)
+  }
+
+  _select () {
+    this._selectTimer = null
+    if (this.closed || this._selected) return
+    const alive = this._candidates.filter((c) => !c.frames.destroyed)
+    if (alive.length === 0) return // tous tombés : on attend une nouvelle connexion
+    // Choix déterministe et identique des deux côtés : plus petit handshakeHash.
+    alive.sort((a, b) => b4a.compare(a.hh, b.hh))
+    const chosen = alive[0]
+    this._selected = true
+    this._candidates = []
+    for (const c of alive) if (c.frames !== chosen.frames) c.frames.destroy()
+    this.frames = chosen.frames
     this._clearTimers() // le pair est là : plus d'expiration de rendez-vous
     this.emit('peer-authenticated', {
-      frames,
-      connectionType: describeConnection(socket, info)
+      frames: chosen.frames,
+      connectionType: describeConnection(chosen.socket, chosen.info)
     })
   }
 
@@ -278,6 +321,9 @@ class SwarmSession extends EventEmitter {
     if (this.closed) return
     this.closed = true
     this._clearTimers()
+    if (this._selectTimer) { clearTimeout(this._selectTimer); this._selectTimer = null }
+    for (const c of this._candidates) { try { c.frames.destroy() } catch {} }
+    this._candidates = []
     if (this._lan) { try { this._lan.close() } catch {} this._lan = null }
     for (const s of this._pendingSockets) {
       try { s.destroy() } catch {}

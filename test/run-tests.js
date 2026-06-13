@@ -17,6 +17,7 @@ const os = require('os')
 const path = require('path')
 const net = require('net')
 const crypto = require('crypto')
+const b4a = require('b4a')
 
 const { WORDS, generateCode, normalizeCode, deriveSecrets, CODE_REGEX } = require('../src/main/code')
 const { authenticate } = require('../src/main/swarm')
@@ -289,6 +290,33 @@ test('swarm.js : liaison de canal — handshakeHash identique OK, divergent reje
     assert.strictEqual(okB, false, 'handshakeHash divergent → rejet (destinataire)')
     a.destroy(); b.destroy()
   }
+})
+
+test('swarm.js : sélection déterministe de connexion — convergence des deux pairs', () => {
+  const { SwarmSession } = require('../src/main/swarm')
+  // 3 connexions concurrentes (ex. 1 DHT + 2 LAN croisées) ; chaque connexion
+  // a un handshakeHash partagé par ses deux extrémités.
+  const hashes = [crypto.randomBytes(32), crypto.randomBytes(32), crypto.randomBytes(32)]
+  const mockFrames = (hh) => ({
+    socket: { handshakeHash: hh }, destroyed: false,
+    destroy () { this.destroyed = true }, on () {}
+  })
+  // Simule un pair qui voit les connexions dans un ordre donné.
+  const pick = (order) => {
+    const s = new SwarmSession({ code: 'TEST-0001', role: 'sender' })
+    let chosen = null
+    s.on('peer-authenticated', ({ frames }) => { chosen = frames.socket.handshakeHash })
+    for (const i of order) { const f = mockFrames(hashes[i]); s._addCandidate(f, f.socket, {}) }
+    s._select()
+    s.closed = true // empêche le minuteur résiduel de re-sélectionner
+    return chosen
+  }
+  // Les deux pairs voient les MÊMES connexions, mais dans un ORDRE différent
+  // (timing réseau distinct) : ils doivent néanmoins retenir la même.
+  const a = pick([0, 1, 2])
+  const b = pick([2, 0, 1])
+  assert.ok(a && b)
+  assert.strictEqual(b4a.compare(a, b), 0, 'les deux pairs convergent sur la même connexion')
 })
 
 /* ------------------------ transfert de bout en bout --------------- */
