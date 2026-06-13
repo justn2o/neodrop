@@ -50,11 +50,17 @@ function authenticate (frames, { authKey, role, timeout = AUTH_TIMEOUT_MS }) {
     let settled = false
 
     const timer = setTimeout(() => settle(false), timeout)
+    const onError = () => settle(false)
+    const onClose = () => settle(false)
     const settle = (ok) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      // Retire TOUS les écouteurs posés ici : sinon error/close restent
+      // attachés à la FrameStream après l'auth et fuient leurs closures.
       frames.off('json', onJson)
+      frames.off('error', onError)
+      frames.off('close', onClose)
       resolve(ok)
     }
 
@@ -92,8 +98,8 @@ function authenticate (frames, { authKey, role, timeout = AUTH_TIMEOUT_MS }) {
     }
 
     frames.on('json', onJson)
-    frames.on('error', () => settle(false))
-    frames.on('close', () => settle(false))
+    frames.on('error', onError)
+    frames.on('close', onClose)
     frames.sendJson({ t: 'HELLO', nonce: myNonce.toString('hex'), role })
   })
 }

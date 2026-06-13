@@ -32,23 +32,41 @@ const { EventEmitter } = require('events')
 const b4a = require('b4a')
 
 const CHUNK_SIZE = 64 * 1024
-const MAX_JSON_FRAME = 256 * 1024 // un message de contrôle ne dépasse jamais ça
-const MAX_FRAME = CHUNK_SIZE + 16
+const MAX_JSON_FRAME = 4 * 1024 * 1024 // OFFER d'un gros dossier (5000 fichiers)
+const MAX_CHUNK_FRAME = CHUNK_SIZE + 16
 const HASH_PRECOMPUTE_LIMIT = 500 * 1024 * 1024 // < 500 Mo : SHA-256 avant envoi
+const HASH_PRECOMPUTE_MAX_FILES = 20 // au-delà, OFFER immédiat (hash au fil de l'envoi)
 const PROGRESS_INTERVAL = 200 // ms entre deux événements de progression
+
+// Timeouts protocolaires : un pair authentifié mais muet ne doit jamais
+// bloquer l'UI indéfiniment (le keep-alive ne détecte que les pairs morts).
+const OFFER_TIMEOUT = 30 * 1000 // réception : attente des détails du transfert
+const ACCEPT_TIMEOUT = 5 * 60 * 1000 // envoi : le destinataire doit confirmer
+const ACK_TIMEOUT = 60 * 1000 // envoi : attente d'un FILE_OK / DONE_ACK
+const IDLE_TIMEOUT = 60 * 1000 // réception : silence en plein transfert
 
 const FRAME_JSON = 0
 const FRAME_CHUNK = 1
 
-// Registre global des fichiers temporaires en cours d'écriture, pour
-// pouvoir les nettoyer si l'application se ferme en plein transfert.
-const activePartFiles = new Set()
+// Registre global des fichiers temporaires en cours d'écriture
+// (chemin .part → WriteStream), pour pouvoir fermer les flux PUIS
+// supprimer les fichiers si l'application se ferme en plein transfert.
+// (Sous Windows, unlink échoue tant que le fichier est ouvert.)
+const activeParts = new Map()
 
-function cleanupAllPartFiles () {
-  for (const p of activePartFiles) {
-    try { fs.unlinkSync(p) } catch {}
-  }
-  activePartFiles.clear()
+async function cleanupAllPartFiles () {
+  const entries = [...activeParts.entries()]
+  activeParts.clear()
+  await Promise.all(entries.map(async ([p, ws]) => {
+    if (ws && !ws.closed) {
+      await new Promise((resolve) => {
+        const t = setTimeout(resolve, 1000)
+        ws.once('close', () => { clearTimeout(t); resolve() })
+        try { ws.destroy() } catch { clearTimeout(t); resolve() }
+      })
+    }
+    await fsp.unlink(p).catch(() => {})
+  }))
 }
 
 /* ------------------------------------------------------------------ */
@@ -80,14 +98,16 @@ class FrameStream extends EventEmitter {
     // Une trame = 4 octets de longueur + (1 octet de type + payload).
     while (this._buffer.length >= 4) {
       const len = readUInt32BE(this._buffer, 0)
-      if (len < 1 || len > MAX_FRAME) {
+      // Borne haute = la plus grande des deux limites (JSON de contrôle ou
+      // bloc de données) ; le type est vérifié plus finement juste après.
+      if (len < 1 || len > MAX_JSON_FRAME + 1) {
         this._fail(new Error('Trame invalide reçue du pair'))
         return
       }
       if (this._buffer.length < 4 + len) break
       const type = this._buffer[4]
       const payload = this._buffer.subarray(5, 4 + len)
-      this._buffer = this._buffer.subarray(4 + len)
+      this._buffer = b4a.from(this._buffer.subarray(4 + len)) // libère le buffer parent
       if (type === FRAME_JSON) {
         if (len > MAX_JSON_FRAME) {
           this._fail(new Error('Message de contrôle trop volumineux'))
@@ -102,6 +122,10 @@ class FrameStream extends EventEmitter {
         }
         this.emit('json', msg)
       } else if (type === FRAME_CHUNK) {
+        if (len > MAX_CHUNK_FRAME) {
+          this._fail(new Error('Bloc de données trop volumineux'))
+          return
+        }
         // Copie : payload pointe dans le buffer de réassemblage réutilisé.
         this.emit('chunk', b4a.from(payload))
       } else {
@@ -123,11 +147,13 @@ class FrameStream extends EventEmitter {
 
   _write (type, payload) {
     if (this._destroyed) return false
-    const header = b4a.alloc(5)
-    writeUInt32BE(header, payload.length + 1, 0)
-    header[4] = type
-    this.socket.write(header)
-    return this.socket.write(payload)
+    // En-tête + payload en une seule écriture : évite de doubler les
+    // appels système (et les paquets) sur le chemin chaud des chunks.
+    const frame = b4a.alloc(5 + payload.length)
+    writeUInt32BE(frame, payload.length + 1, 0)
+    frame[4] = type
+    frame.set(payload, 5)
+    return this.socket.write(frame)
   }
 
   /** Attend que le tampon d'envoi de la socket se vide (backpressure). */
@@ -145,6 +171,22 @@ class FrameStream extends EventEmitter {
     if (this._destroyed) return
     this._destroyed = true
     this.emit('error', err)
+  }
+
+  /**
+   * Ferme proprement : laisse partir les octets déjà mis en file (un
+   * éventuel CANCEL/REJECT), puis détruit. Remplace les setTimeout devinés.
+   */
+  endGracefully () {
+    if (this._destroyed) return
+    this._destroyed = true
+    try {
+      this.socket.end(() => { try { this.socket.destroy() } catch {} })
+      // Filet de sécurité si le 'finish' n'arrive jamais (pair muet).
+      setTimeout(() => { try { this.socket.destroy() } catch {} }, 3000).unref?.()
+    } catch {
+      try { this.socket.destroy() } catch {}
+    }
   }
 
   destroy () {
@@ -198,8 +240,50 @@ function sanitizeFilename (name) {
   return s
 }
 
-/** Trouve un chemin libre : « fichier.ext », « fichier (1).ext », etc. */
-async function uniquePath (dir, name) {
+/**
+ * Assainit un chemin RELATIF reçu pour un transfert de dossier :
+ * chaque composante est passée dans sanitizeFilename (ce qui neutralise
+ * « .. », les séparateurs et les caractères interdits), puis recollée avec
+ * le séparateur de la plateforme. Le résultat ne peut jamais sortir du
+ * dossier de destination. Retourne null si le chemin est entièrement vide.
+ */
+function sanitizeRelPath (relPath) {
+  const parts = String(relPath)
+    .split(/[/\\]/)
+    .map((p) => p.trim())
+    .filter((p) => p !== '' && p !== '.' && p !== '..')
+    .map((p) => sanitizeFilename(p))
+  if (parts.length === 0) return null
+  return parts.join(path.sep)
+}
+
+/**
+ * Trouve un chemin libre. Pour un fichier seul, suffixe « (1) » sur le nom.
+ * Pour un fichier dans un dossier reçu (relPath avec sous-dossiers), c'est
+ * le dossier RACINE qui est suffixé une seule fois, afin que toute
+ * l'arborescence reçue reste regroupée et cohérente.
+ */
+async function uniquePath (destDir, relPath) {
+  const segments = relPath.split(path.sep)
+  if (segments.length === 1) {
+    return uniqueLeaf(destDir, relPath)
+  }
+  // Dossier : réserve un nom de racine libre, puis garde l'arbo dessous.
+  const root = await reserveRootDir(destDir, segments[0])
+  return path.join(destDir, root, ...segments.slice(1))
+}
+
+/** Réserve un nom de dossier racine libre (« dossier », « dossier (1) »…). */
+async function reserveRootDir (destDir, name) {
+  for (let i = 0; i < 10000; i++) {
+    const candidate = i === 0 ? name : `${name} (${i})`
+    if (!await pathExists(path.join(destDir, candidate))) return candidate
+  }
+  throw new Error('Impossible de trouver un nom de dossier libre')
+}
+
+/** Trouve un chemin libre pour un fichier feuille : « x.ext », « x (1).ext ». */
+async function uniqueLeaf (dir, name) {
   const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')) : ''
   const base = ext ? name.slice(0, name.length - ext.length) : name
   for (let i = 0; i < 10000; i++) {
@@ -280,10 +364,14 @@ class ProgressTracker {
  *              'file-done', 'done', 'error', 'cancelled'.
  */
 class TransferSender extends EventEmitter {
-  constructor (frames, filePaths, { senderName }) {
+  constructor (frames, entries, { senderName }) {
     super()
     this.frames = frames
-    this.filePaths = filePaths
+    // Normalise : on accepte soit des chemins (fichiers seuls), soit des
+    // objets { path, relPath } (arborescence d'un dossier). relPath est le
+    // chemin affiché/recréé chez le destinataire.
+    this.entries = entries.map((e) =>
+      typeof e === 'string' ? { path: e, relPath: path.basename(e) } : e)
     this.senderName = senderName
     this.cancelled = false
     this.finished = false
@@ -309,24 +397,35 @@ class TransferSender extends EventEmitter {
   }
 
   async _run () {
-    // Construit l'OFFER. Pour les fichiers < 500 Mo, le SHA-256 est
-    // pré-calculé en streaming ; au-delà il sera calculé pendant l'envoi.
+    // Construit l'OFFER. Le SHA-256 n'est pré-calculé que pour les petits
+    // envois (peu de fichiers, chacun < 500 Mo) afin de ne pas relire des
+    // gigaoctets avant même d'afficher la demande ; sinon le hash est
+    // calculé au fil de l'envoi (FILE_END), ce qui reste vérifié.
     const files = []
-    for (let i = 0; i < this.filePaths.length; i++) {
-      const p = this.filePaths[i]
+    const precompute = this.entries.length <= HASH_PRECOMPUTE_MAX_FILES
+    for (let i = 0; i < this.entries.length; i++) {
+      const { path: p, relPath } = this.entries[i]
       const st = await fsp.stat(p)
       if (!st.isFile()) throw new Error(`« ${path.basename(p)} » n'est pas un fichier`)
-      const entry = { id: i, name: path.basename(p), size: st.size, sha256: null }
-      if (st.size < HASH_PRECOMPUTE_LIMIT) entry.sha256 = await hashFile(p)
+      const entry = {
+        id: i,
+        name: path.basename(relPath),
+        relPath,
+        size: st.size,
+        sha256: null
+      }
+      if (precompute && st.size < HASH_PRECOMPUTE_LIMIT) entry.sha256 = await hashFile(p)
       files.push(entry)
       if (this.cancelled) return
     }
     const totalSize = files.reduce((a, f) => a + f.size, 0)
+    const isFolder = this.entries.some((e) => e.relPath.includes('/') || e.relPath.includes('\\'))
 
-    this.frames.sendJson({ t: 'OFFER', files, sender: this.senderName })
+    this.frames.sendJson({ t: 'OFFER', files, sender: this.senderName, folder: isFolder })
     this.emit('offer-sent', { files, totalSize })
 
-    const reply = await this._waitJson(['ACCEPT', 'REJECT'])
+    // Le destinataire peut réfléchir, mais pas indéfiniment.
+    const reply = await this._waitJson(['ACCEPT', 'REJECT'], ACCEPT_TIMEOUT)
     if (reply.t === 'REJECT') {
       this.finished = true
       this.emit('rejected')
@@ -341,11 +440,11 @@ class TransferSender extends EventEmitter {
       const meta = { index: i, count: files.length, name: file.name, size: file.size }
       this.frames.sendJson({ t: 'FILE_START', id: file.id })
 
-      const sha256 = await this._streamFile(this.filePaths[i], meta, progress)
+      const sha256 = await this._streamFile(this.entries[i].path, meta, progress)
       if (this.cancelled || this.finished || this.frames.destroyed) return
 
       this.frames.sendJson({ t: 'FILE_END', id: file.id, sha256 })
-      const ack = await this._waitJson(['FILE_OK', 'FILE_FAIL'])
+      const ack = await this._waitJson(['FILE_OK', 'FILE_FAIL'], ACK_TIMEOUT)
       if (ack.t === 'FILE_FAIL') {
         throw new Error(`Le fichier « ${file.name} » a été rejeté : ${ack.reason || 'intégrité non vérifiée'}`)
       }
@@ -354,9 +453,13 @@ class TransferSender extends EventEmitter {
     }
 
     this.frames.sendJson({ t: 'DONE' })
-    await this._waitJson(['DONE_ACK'])
+    await this._waitJson(['DONE_ACK'], ACK_TIMEOUT)
     this.finished = true
     this.emit('done')
+    // L'expéditeur initie la fermeture (il a confirmé la réception du
+    // DONE_ACK) : end() propre plutôt qu'un reset qui ferait croire à une
+    // erreur côté destinataire encore en train de lire.
+    this.frames.endGracefully()
   }
 
   /** Envoie un fichier par blocs de 64 Ko avec gestion du backpressure. */
@@ -392,7 +495,7 @@ class TransferSender extends EventEmitter {
     })
   }
 
-  _waitJson (types) {
+  _waitJson (types, timeout = 0) {
     return new Promise((resolve, reject) => {
       const onJson = (msg) => {
         if (msg.t === 'CANCEL') {
@@ -408,7 +511,10 @@ class TransferSender extends EventEmitter {
       }
       const onError = (err) => { cleanup(); reject(err) }
       const onClose = () => { cleanup(); reject(new Error('La connexion avec le destinataire a été perdue')) }
+      const onTimeout = () => { cleanup(); reject(new Error('Le destinataire ne répond plus.')) }
+      let timer = null
       const cleanup = () => {
+        if (timer) clearTimeout(timer)
         this.frames.off('json', onJson)
         this.frames.off('error', onError)
         this.frames.off('close', onClose)
@@ -416,6 +522,7 @@ class TransferSender extends EventEmitter {
       this.frames.on('json', onJson)
       this.frames.on('error', onError)
       this.frames.on('close', onClose)
+      if (timeout > 0) timer = setTimeout(onTimeout, timeout)
     })
   }
 
@@ -433,8 +540,8 @@ class TransferSender extends EventEmitter {
     if (this._currentStream) this._currentStream.destroy()
     try { this.frames.sendJson({ t: 'CANCEL' }) } catch {}
     this.emit('cancelled', { by: 'local' })
-    // Laisse une chance au CANCEL de partir avant de couper.
-    setTimeout(() => this.frames.destroy(), 200)
+    // Laisse partir le CANCEL (flush) avant de fermer.
+    this.frames.endGracefully()
   }
 
   _fail (err) {
@@ -443,6 +550,18 @@ class TransferSender extends EventEmitter {
     this.finished = true
     this.emit('error', err)
     this.frames.destroy()
+  }
+
+  /**
+   * Arrêt silencieux pour le démantèlement de session (fermeture de l'app).
+   * Marque comme terminé AVANT que la socket ne soit détruite, afin que les
+   * écouteurs 'close'/'error' n'émettent pas sur un EventEmitter sans listener.
+   */
+  dispose () {
+    this.finished = true
+    if (this._currentStream) { try { this._currentStream.destroy() } catch {} }
+    this.removeAllListeners()
+    this.on('error', () => {}) // puits : aucune 'error' non gérée
   }
 }
 
@@ -466,6 +585,8 @@ class TransferReceiver extends EventEmitter {
     this._current = null // { file, ws, hash, bytes, partPath, finalPath }
     this._progress = null
     this._results = []
+    this._idleTimer = null
+    this._rootDirs = new Map() // relPath racine → nom de dossier réservé
 
     // Les trames sont émises de façon synchrone par la socket alors que
     // certains handlers sont asynchrones (création du .part, rename…) :
@@ -482,6 +603,21 @@ class TransferReceiver extends EventEmitter {
         this._fail(new Error("La connexion avec l'expéditeur a été perdue"))
       }
     })
+
+    // Un pair authentifié mais muet (jamais d'OFFER) ne doit pas bloquer
+    // l'UI : on arme un délai d'attente des détails du transfert.
+    this._armIdle(OFFER_TIMEOUT, "L'expéditeur n'a envoyé aucun fichier à temps.")
+  }
+
+  _armIdle (ms, message) {
+    this._clearIdle()
+    this._idleTimer = setTimeout(() => {
+      this._fail(new Error(message || 'Le transfert est resté sans activité trop longtemps.'))
+    }, ms)
+  }
+
+  _clearIdle () {
+    if (this._idleTimer) { clearTimeout(this._idleTimer); this._idleTimer = null }
   }
 
   /** Accepte l'offre : seul point où l'écriture disque devient possible. */
@@ -490,15 +626,18 @@ class TransferReceiver extends EventEmitter {
     this.destDir = destDir
     const totalSize = this.offer.files.reduce((a, f) => a + f.size, 0)
     this._progress = new ProgressTracker(totalSize, (p) => this.emit('progress', p))
+    // Le transfert démarre : on surveille les silences prolongés.
+    this._armIdle(IDLE_TIMEOUT, "L'expéditeur ne répond plus.")
     this.frames.sendJson({ t: 'ACCEPT' })
   }
 
   reject () {
     if (!this.offer || this.destDir) return
     this.finished = true
+    this._clearIdle()
     this.frames.sendJson({ t: 'REJECT' })
     this.emit('cancelled', { by: 'local', rejected: true })
-    setTimeout(() => this.frames.destroy(), 200)
+    this.frames.endGracefully()
   }
 
   async _onJson (msg) {
@@ -510,16 +649,31 @@ class TransferReceiver extends EventEmitter {
           if (!Array.isArray(msg.files) || msg.files.length === 0) {
             throw new Error('Offre de transfert invalide')
           }
-          const files = msg.files.map((f, i) => ({
-            id: Number(f.id),
-            name: sanitizeFilename(f.name),
-            size: Number(f.size),
-            sha256: typeof f.sha256 === 'string' ? f.sha256 : null
-          }))
+          const seenIds = new Set()
+          const files = msg.files.map((f) => {
+            const rel = sanitizeRelPath(f.relPath || f.name) || sanitizeFilename(f.name)
+            return {
+              id: Number(f.id),
+              name: sanitizeFilename(f.name),
+              relPath: rel,
+              size: Number(f.size),
+              sha256: typeof f.sha256 === 'string' ? f.sha256 : null
+            }
+          })
           for (const f of files) {
+            if (!Number.isInteger(f.id) || f.id < 0) throw new Error('Offre de transfert invalide')
+            if (seenIds.has(f.id)) throw new Error('Offre de transfert invalide (identifiants dupliqués)')
+            seenIds.add(f.id)
             if (!Number.isFinite(f.size) || f.size < 0) throw new Error('Offre de transfert invalide')
           }
-          this.offer = { files, sender: String(msg.sender || 'Pair inconnu').slice(0, 64) }
+          // Plus d'attente d'OFFER : on laisse l'utilisateur confirmer
+          // (le minuteur côté expéditeur, ACCEPT_TIMEOUT, prend le relais).
+          this._clearIdle()
+          this.offer = {
+            files,
+            sender: String(msg.sender || 'Pair inconnu').slice(0, 64),
+            folder: !!msg.folder
+          }
           this.emit('offer', this.offer)
           break
         }
@@ -531,14 +685,18 @@ class TransferReceiver extends EventEmitter {
           break
         case 'DONE': {
           this.finished = true
+          this._clearIdle()
           this.frames.sendJson({ t: 'DONE_ACK' })
           this.emit('done', { files: this._results })
-          setTimeout(() => this.frames.destroy(), 200)
+          // On laisse l'expéditeur fermer (il reçoit le DONE_ACK puis envoie
+          // un FIN). Filet de sécurité si ce FIN n'arrive jamais.
+          setTimeout(() => { try { this.frames.destroy() } catch {} }, 5000).unref?.()
           break
         }
         case 'CANCEL': {
           if (this.finished || this.cancelled) return
           this.cancelled = true
+          this._clearIdle()
           await this._cleanupCurrent()
           this.emit('cancelled', { by: 'peer' })
           this.frames.destroy()
@@ -557,13 +715,15 @@ class TransferReceiver extends EventEmitter {
     if (index === -1) throw new Error('Fichier inconnu dans le protocole')
     const file = this.offer.files[index]
 
-    await fsp.mkdir(this.destDir, { recursive: true })
-    const finalPath = await uniquePath(this.destDir, file.name)
+    // Résout un chemin sûr sous destDir, en regroupant les dossiers reçus
+    // sous un nom de racine unique mémorisé (pour garder l'arborescence).
+    const finalPath = await this._resolveDest(file.relPath)
+    await fsp.mkdir(path.dirname(finalPath), { recursive: true })
     const partPath = finalPath + '.part'
-    activePartFiles.add(partPath)
 
     const ws = fs.createWriteStream(partPath, { highWaterMark: CHUNK_SIZE * 4 })
     ws.on('error', (err) => this._fail(err))
+    activeParts.set(partPath, ws)
     this._current = {
       file,
       meta: { index, count: this.offer.files.length, name: file.name, size: file.size },
@@ -575,6 +735,25 @@ class TransferReceiver extends EventEmitter {
     }
   }
 
+  /**
+   * Donne un chemin de destination sûr pour une composante relPath reçue.
+   * Les fichiers d'un même dossier racine partagent le suffixe d'unicité
+   * réservé une seule fois, de sorte que toute l'arborescence reste groupée.
+   */
+  async _resolveDest (relPath) {
+    const segments = relPath.split(path.sep)
+    if (segments.length === 1) {
+      return uniqueLeaf(this.destDir, relPath)
+    }
+    const rootKey = segments[0]
+    let mapped = this._rootDirs.get(rootKey)
+    if (!mapped) {
+      mapped = await reserveRootDir(this.destDir, rootKey)
+      this._rootDirs.set(rootKey, mapped)
+    }
+    return path.join(this.destDir, mapped, ...segments.slice(1))
+  }
+
   _onChunk (chunk) {
     if (this.cancelled || this.finished) return
     const cur = this._current
@@ -582,6 +761,7 @@ class TransferReceiver extends EventEmitter {
       this._fail(new Error('Protocole invalide : données reçues sans fichier en cours'))
       return
     }
+    this._armIdle(IDLE_TIMEOUT, "L'expéditeur ne répond plus.") // activité → on repousse le délai
     if (cur.bytes + chunk.length > cur.file.size) {
       this._fail(new Error("L'expéditeur a envoyé plus de données qu'annoncé"))
       return
@@ -612,7 +792,9 @@ class TransferReceiver extends EventEmitter {
   async _endFile (id, senderHash) {
     const cur = this._current
     if (!cur || cur.file.id !== id) throw new Error('Protocole invalide : fin de fichier inattendue')
-    this._current = null
+    // NB : on NE vide PAS this._current avant les opérations async ci-dessous.
+    // Si ws.end() ou rename() échoue (disque plein, permission), l'exception
+    // remonte et _fail() → _cleanupCurrent() doit encore retrouver le .part.
 
     await new Promise((resolve, reject) => cur.ws.end((err) => err ? reject(err) : resolve()))
 
@@ -622,16 +804,18 @@ class TransferReceiver extends EventEmitter {
 
     if (!sizeOk || !hashOk) {
       // Fichier corrompu : suppression du .part, erreur des deux côtés.
+      this._current = null
       await fsp.unlink(cur.partPath).catch(() => {})
-      activePartFiles.delete(cur.partPath)
+      activeParts.delete(cur.partPath)
       this.frames.sendJson({ t: 'FILE_FAIL', id, reason: 'hash SHA-256 invalide' })
       throw new Error(`Le fichier « ${cur.file.name} » est corrompu (vérification d'intégrité échouée). Il a été supprimé.`)
     }
 
     // Intégrité vérifiée : le .part devient le fichier définitif.
     await fsp.rename(cur.partPath, cur.finalPath)
-    activePartFiles.delete(cur.partPath)
-    this._results.push({ id, name: cur.file.name, path: cur.finalPath, size: cur.file.size })
+    this._current = null
+    activeParts.delete(cur.partPath)
+    this._results.push({ id, name: cur.file.name, relPath: cur.file.relPath, path: cur.finalPath, size: cur.file.size })
     this.frames.sendJson({ t: 'FILE_OK', id })
     this._progress.update(cur.meta, cur.file.size, 0, true)
     this.emit('file-done', { id, name: cur.file.name, path: cur.finalPath })
@@ -641,34 +825,48 @@ class TransferReceiver extends EventEmitter {
     const cur = this._current
     this._current = null
     if (!cur) return
-    // Attendre la fermeture effective du flux avant l'unlink : un destroy
-    // pendant l'open() asynchrone recréerait le fichier après coup.
+    // Attendre la fermeture effective du flux avant l'unlink : sous Windows
+    // un unlink sur un fichier encore ouvert échoue.
     await new Promise((resolve) => {
       if (cur.ws.closed) return resolve()
       cur.ws.once('close', resolve)
       try { cur.ws.destroy() } catch { resolve() }
     })
     await fsp.unlink(cur.partPath).catch(() => {})
-    activePartFiles.delete(cur.partPath)
+    activeParts.delete(cur.partPath)
   }
 
   cancel () {
     if (this.finished || this.cancelled) return
     this.cancelled = true
+    this._clearIdle()
     try { this.frames.sendJson({ t: 'CANCEL' }) } catch {}
     this._cleanupCurrent().finally(() => {
       this.emit('cancelled', { by: 'local' })
-      setTimeout(() => this.frames.destroy(), 200)
+      this.frames.endGracefully()
     })
   }
 
   _fail (err) {
     if (this.finished || this.cancelled) return
     this.finished = true
+    this._clearIdle()
     this._cleanupCurrent().finally(() => {
       this.emit('error', err)
       this.frames.destroy()
     })
+  }
+
+  /**
+   * Arrêt silencieux pour le démantèlement de session (fermeture de l'app).
+   * Marque comme terminé et nettoie le .part en cours sans émettre d'erreur.
+   */
+  dispose () {
+    this.finished = true
+    this._clearIdle()
+    this.removeAllListeners()
+    this.on('error', () => {})
+    return this._cleanupCurrent()
   }
 }
 
@@ -685,6 +883,7 @@ module.exports = {
   TransferSender,
   TransferReceiver,
   sanitizeFilename,
+  sanitizeRelPath,
   uniquePath,
   hashFile,
   cleanupAllPartFiles,
