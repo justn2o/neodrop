@@ -1,0 +1,13 @@
+{
+  "name": "neodrop-mobile-backend",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.js",
+  "description": "Embedded Node.js backend for NeoDrop mobile (reuses the desktop protocol core).",
+  "dependencies": {
+    "@hyperswarm/secret-stream": "^6.9.1",
+    "b4a": "^1.6.7",
+    "hyperswarm": "^4.8.4",
+    "multicast-dns": "^7.2.5"
+  }
+}
