@@ -37,6 +37,8 @@ export default function App () {
   const [progress, setProgress] = useState(null)
   const [errorMsg, setErrorMsg] = useState('')
   const [received, setReceived] = useState([])
+  const [opts, setOpts] = useState({ strength: 'normal', passphrase: '', compression: true })
+  const [recvPass, setRecvPass] = useState('')
   const role = useRef(null)
 
   const sendCmd = useCallback((obj) => nodejs.channel.send(JSON.stringify(obj)), [])
@@ -95,7 +97,7 @@ export default function App () {
       if (!paths.length) return
       role.current = 'sender'
       setStatus('Preparing…')
-      sendCmd({ cmd: 'send', paths, options: {} })
+      sendCmd({ cmd: 'send', paths, options: opts })
     } catch (e) {
       if (!DocumentPicker.isCancel(e)) showError('Could not pick files.')
     }
@@ -108,8 +110,7 @@ export default function App () {
     }
     role.current = 'receiver'
     setStatus("Looking for the sender…")
-    setScreen('receive')
-    sendCmd({ cmd: 'receive', code: inputCode, destDir, options: {} })
+    sendCmd({ cmd: 'receive', code: inputCode, destDir, options: { passphrase: recvPass } })
   }
 
   /* ---------------- screens ---------------- */
@@ -122,8 +123,35 @@ export default function App () {
           <Text style={styles.tag}>Peer-to-peer file transfer.{'\n'}No server, end-to-end encrypted.</Text>
         </View>
         <Btn primary label="Send"
-          onPress={() => { role.current = 'sender'; pickAndSend() }} />
+          onPress={() => { role.current = 'sender'; setScreen('send') }} />
         <Btn label="Receive" onPress={() => { role.current = 'receiver'; setScreen('receive') }} />
+      </Shell>
+    )
+  }
+
+  if (screen === 'send') {
+    return (
+      <Shell>
+        <Text style={styles.h2}>Send files</Text>
+        <Text style={styles.label}>Code strength</Text>
+        <View style={styles.segRow}>
+          {[['normal', 'Normal'], ['high', 'Stronger'], ['max', 'Max']].map(([v, l]) => (
+            <TouchableOpacity key={v} onPress={() => setOpts((o) => ({ ...o, strength: v }))}
+              style={[styles.seg, opts.strength === v && styles.segOn]}>
+              <Text style={[styles.segTxt, opts.strength === v && { color: '#fff' }]}>{l}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <Text style={styles.label}>Passphrase (optional)</Text>
+        <TextInput style={styles.input2} value={opts.passphrase} secureTextEntry
+          onChangeText={(t) => setOpts((o) => ({ ...o, passphrase: t }))}
+          placeholder="Required in addition to the code" placeholderTextColor="#9aa1ac" />
+        <TouchableOpacity style={styles.check} onPress={() => setOpts((o) => ({ ...o, compression: !o.compression }))}>
+          <View style={[styles.box, opts.compression && styles.boxOn]}>{opts.compression && <Text style={{ color: '#fff' }}>✓</Text>}</View>
+          <Text style={styles.body}>Compress compressible files</Text>
+        </TouchableOpacity>
+        <Btn primary label="Choose files" onPress={pickAndSend} />
+        <Btn danger label="Back" onPress={goHome} />
       </Shell>
     )
   }
@@ -149,6 +177,9 @@ export default function App () {
         <Text style={styles.label}>Pairing code</Text>
         <TextInput style={styles.input} value={inputCode} onChangeText={setInputCode}
           autoCapitalize="characters" placeholder="TIGER-7342" placeholderTextColor="#9aa1ac" />
+        <Text style={styles.label}>Passphrase (if the sender set one)</Text>
+        <TextInput style={styles.input2} value={recvPass} onChangeText={setRecvPass} secureTextEntry
+          placeholder="Leave empty if none" placeholderTextColor="#9aa1ac" />
         <Btn primary label="Connect" onPress={connect} />
         {!!status && <Row><Spin /><Text style={styles.muted}>{status}</Text></Row>}
         <Btn danger label="Cancel" onPress={goHome} />
@@ -260,5 +291,13 @@ const styles = StyleSheet.create({
   fileRow: { flexDirection: 'row', justifyContent: 'space-between', padding: 12, borderBottomWidth: 1, borderBottomColor: '#eef0f2' },
   fileName: { flex: 1, marginRight: 10, color: '#141922' },
   bar: { height: 10, backgroundColor: '#e4e7ec', borderRadius: 999, overflow: 'hidden' },
-  fill: { height: 10, backgroundColor: ACCENT }
+  fill: { height: 10, backgroundColor: ACCENT },
+  input2: { borderWidth: 1, borderColor: '#d6dae1', borderRadius: 10, padding: 12, fontSize: 15, backgroundColor: '#fff', color: '#141922' },
+  segRow: { flexDirection: 'row', gap: 8 },
+  seg: { flex: 1, borderWidth: 1, borderColor: '#d6dae1', borderRadius: 8, paddingVertical: 10, alignItems: 'center', backgroundColor: '#fff' },
+  segOn: { backgroundColor: ACCENT, borderColor: ACCENT },
+  segTxt: { fontWeight: '600', color: '#141922' },
+  check: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  box: { width: 22, height: 22, borderRadius: 6, borderWidth: 1, borderColor: '#d6dae1', alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
+  boxOn: { backgroundColor: ACCENT, borderColor: ACCENT }
 })
